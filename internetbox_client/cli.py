@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
-import time
+import threading
 import typing
 from typing import TYPE_CHECKING, Annotated, Optional
 
@@ -239,6 +239,8 @@ def export(
     (or the IB_HOSTNAME / IB_PASSWORD / IB_USERNAME environment variables)
     supplied before the 'export' sub-command.
     """
+    import signal
+
     import prometheus_client
 
     from internetbox_client.exporter import InternetBoxCollector
@@ -259,9 +261,12 @@ def export(
     typer.echo(f"Prometheus exporter listening on http://0.0.0.0:{port}/metrics")
     typer.echo(f"Collection interval: {interval}s  |  Press Ctrl-C to stop.")
 
+    _shutdown = threading.Event()
+    signal.signal(signal.SIGTERM, lambda _sig, _frame: _shutdown.set())
+
     try:
-        while True:
-            time.sleep(1)
+        while not _shutdown.wait(timeout=1):
+            pass
     except KeyboardInterrupt:
         pass
     finally:
