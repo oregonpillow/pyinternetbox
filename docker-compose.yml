@@ -1,0 +1,12 @@
+services:
+  pyinternetbox-exporter:
+    container_name: pyinternetbox-exporter
+    build: .
+    ports:
+      - "9101:9101"
+    environment:
+      IB_HOSTNAME: https://internetbox.swisscom.ch
+      IB_SSL_VERIFY: "true"
+      IB_USERNAME: admin
+      IB_PASSWORD: <your_password_here>
+    restart: unless-stopped

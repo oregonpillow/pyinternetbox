@@ -1,0 +1,52 @@
+<svg width="512" height="512" viewBox="50 50 412 412" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="50" y="50" width="412" height="412" rx="77" fill="#0F172A"/>
+  
+  <!-- Left brace -->
+  <path d="M150 140
+           C120 140 110 160 110 185
+           V215
+           C110 235 100 245 82 256
+           C100 267 110 277 110 297
+           V327
+           C110 352 120 372 150 372"
+        stroke="#38BDF8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Right brace -->
+  <path d="M362 140
+           C392 140 402 160 402 185
+           V215
+           C402 235 412 245 430 256
+           C412 267 402 277 402 297
+           V327
+           C402 352 392 372 362 372"
+        stroke="#38BDF8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Router body -->
+  <rect x="176" y="230" width="160" height="72" rx="18" fill="#E2E8F0"/>
+  
+  <!-- Router lights -->
+  <circle cx="212" cy="266" r="7" fill="#22C55E"/>
+  <circle cx="240" cy="266" r="7" fill="#38BDF8"/>
+  <circle cx="268" cy="266" r="7" fill="#94A3B8"/>
+  
+  <!-- Router line/detail -->
+  <rect x="290" y="260" width="28" height="12" rx="6" fill="#94A3B8"/>
+  
+  <!-- Left antenna -->
+  <path d="M208 230 V188" stroke="#E2E8F0" stroke-width="12" stroke-linecap="round"/>
+  <path d="M194 184 C194 170 205 160 219 160" stroke="#38BDF8" stroke-width="10" stroke-linecap="round"/>
+  
+  <!-- Right antenna -->
+  <path d="M304 230 V188" stroke="#E2E8F0" stroke-width="12" stroke-linecap="round"/>
+  <path d="M293 160 C307 160 318 170 318 184" stroke="#38BDF8" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Horizontal metric gauges -->
+  <rect x="184" y="326" width="144" height="12" rx="6" fill="#1E293B"/>
+  <rect x="184" y="326" width="104" height="12" rx="6" fill="#38BDF8"/>
+
+  <rect x="184" y="348" width="144" height="12" rx="6" fill="#1E293B"/>
+  <rect x="184" y="348" width="126" height="12" rx="6" fill="#22C55E"/>
+
+  <rect x="184" y="370" width="144" height="12" rx="6" fill="#1E293B"/>
+  <rect x="184" y="370" width="82" height="12" rx="6" fill="#7DD3FC"/>
+</svg>
