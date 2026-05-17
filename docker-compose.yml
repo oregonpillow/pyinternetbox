@@ -8,5 +8,5 @@ services:
       IB_HOSTNAME: https://internetbox.swisscom.ch
       IB_SSL_VERIFY: "true"
       IB_USERNAME: admin
-      IB_PASSWORD: <your_password_here>
+      IB_PASSWORD: "${IB_PASSWORD}"
     restart: unless-stopped
