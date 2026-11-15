@@ -635,6 +635,16 @@ class TestSysbus:
         data = mock_session_manager.post.call_args[0][1]
         assert data["parameters"]["flag"] == "eth && wan"
 
+    def test_net_dev_stats_default_interface(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Sysbus, mock_session_manager)
+        svc.net_dev_stats()
+        assert mock_session_manager.post.call_args[0][0] == "/sysbus/NeMo/Intf/veip0:getNetDevStats"
+
+    def test_net_dev_stats_custom_interface(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Sysbus, mock_session_manager)
+        svc.net_dev_stats("bridge")
+        assert mock_session_manager.post.call_args[0][0] == "/sysbus/NeMo/Intf/bridge:getNetDevStats"
+
 
 # ── MST ───────────────────────────────────────────────────────────────
 

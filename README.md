@@ -16,6 +16,7 @@
   - [CLI usage](#cli-usage)
   - [Library usage](#library-usage)
 - [📡 Running the Exporter](#-running-the-exporter)
+  - [Traffic metrics: which one to use](#traffic-metrics-which-one-to-use)
 - [Environment Variables](#environment-variables)
 - [Usage without authentication](#usage-without-authentication)
 - [🧑‍💻 Development](#-development)
@@ -112,6 +113,31 @@ scrape_configs:
       - targets: ["localhost:9101"]
 ```
 
+### Traffic metrics: which one to use
+
+The router exposes several traffic figures that look similar but measure different things. `rx`/`tx` are always from the
+**router's point of view**: `rx` is what the router _received_ on that interface, `tx` is what it _sent_.
+
+| Metric                                                                                    | Interface                       | What it counts                                                                                                  | `rx` means                               | `tx` means                                 | Type                                  | Includes wired devices  | Includes traffic between home devices |
+| ----------------------------------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------ | ------------------------------------- | ----------------------- | ------------------------------------- |
+| `internetbox_wan_rx_bytes_total` / `internetbox_wan_tx_bytes_total`                       | `veip0` (XGS-PON fibre, WAN)    | All traffic between your home and the internet, from every device                                               | **Downloaded** from the internet         | **Uploaded** to the internet               | Counter (bytes since router boot)     | ✅                      | ❌                                    |
+| `internetbox_wifi_rx_bytes_total` / `internetbox_wifi_tx_bytes_total`                     | `wl0` (5 GHz), `wl1` (2.4 GHz)  | All traffic over each Wi-Fi radio, to the internet _and_ to other devices at home                               | Sent **by Wi-Fi devices** (their upload) | Sent **to Wi-Fi devices** (their download) | Counter (bytes since router boot)     | ❌                      | ✅ (Wi-Fi devices only)               |
+| `internetbox_device_rx_bandwidth_last{day,week,month}_bytes` / `…_tx_…`                   | Per device (router device list) | The router's own per-device usage over a **rolling** window (last 24 h / 7 d / 30 d), recalculated about hourly | Received from the device                 | Sent to the device                         | Gauge (rolling total, goes up & down) | ❌ (Wi-Fi devices only) | ❓ not verified                       |
+| `internetbox_veip_downstream_curr_rate_kbps` / `internetbox_veip_upstream_curr_rate_kbps` | `veip0` (XGS-PON fibre, WAN)    | The **link speed** the fibre connection is synced at (capacity), not traffic. Constant unless the link resyncs  | –                                        | –                                          | Gauge (kbps)                          | –                       | –                                     |
+
+Notes:
+
+- **"How much did I download today?"** → `increase(internetbox_wan_rx_bytes_total[<seconds since midnight>s])`.
+- **"How fast am I downloading right now?"** → `rate(internetbox_wan_rx_bytes_total[5m]) * 8` (bits per second). The
+  `veip_*_curr_rate_kbps` metrics stay at the line speed (e.g. ~10 Gbit/s) no matter how much you download.
+- **Wired traffic between home devices is not measured anywhere**: it is switched by the router's Ethernet switch and
+  never counted, and per-port Ethernet counters (`eth0`-`eth4`) are not accessible with the `admin` user (HTTP 401).
+- The router's `bridge` interface is **not** exported: it only sees traffic routed through the router (i.e. internet
+  traffic, counted again from the LAN side with `rx`/`tx` swapped), so it duplicates the WAN counters.
+- Counters restart from zero when the Internet Box reboots; Prometheus' `rate()` and `increase()` handle this.
+- The per-device rolling totals are only reported for Wi-Fi devices. The direction of their `rx`/`tx` follows the
+  router's naming and has not been independently verified.
+
 Dashboards can be found in the Grafana folder.
 
 <p align="center">
@@ -149,6 +175,7 @@ A limited selection of methods are available without authentication, which means
 | Sysbus.mibs             | `ibox.sysbus.mibs()`              | `ibox sysbus mibs`              |
 | Sysbus.veip             | `ibox.sysbus.veip()`              | `ibox sysbus veip`              |
 | Sysbus.veip_mibs        | `ibox.sysbus.veip_mibs()`         | `ibox sysbus veip-mibs`         |
+| Sysbus.net_dev_stats    | `ibox.sysbus.net_dev_stats()`     | `ibox sysbus net-dev-stats`     |
 | Voice.status            | `ibox.voice.status()`             | `ibox voice status`             |
 | Voice.trunks            | `ibox.voice.trunks()`             | `ibox voice trunks`             |
 | Wifi.status             | `ibox.wifi.status()`              | `ibox wifi status`              |

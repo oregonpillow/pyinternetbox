@@ -86,9 +86,9 @@ def register_metrics(collector: InternetBoxCollector, client: InternetBoxClient)
                     description="Telephony enabled state of the Internet Box (1 for Enabled, 0 for Disabled)",
                 )
                 continue  # skip the Internet Box itself
+            # IPAddress is deliberately not used as a label: it changes over time (e.g. IPv6 privacy
+            # addresses), which would create a new series for the same device on every change.
             labels = {"Name": device["Name"], "Key": device["Key"]}
-            if "IPAddress" in device:
-                labels.update({"IP": device["IPAddress"]})
             if "Manufacturer" in device:
                 labels.update({"Manufacturer": device["Manufacturer"]})
             if "ModelName" in device:
@@ -434,3 +434,46 @@ def register_metrics(collector: InternetBoxCollector, client: InternetBoxClient)
             labels=labels,
             description="VEIP upstream current rate in kbps",
         )
+
+    # ── WAN traffic (cumulative counters for all internet traffic) ──────
+    @collector.register_collector
+    def collect_wan_traffic(col: InternetBoxCollector) -> None:
+        data = json.loads(client.sysbus.net_dev_stats("veip0"))
+        stats = data.get("status", {})
+        if not stats:
+            return
+        labels = {"interface": "veip0"}
+        col.update_counter(
+            name="internetbox_wan_rx_bytes",
+            value=stats["RxBytes"],
+            labels=labels,
+            description="Total bytes received from the internet (downloaded) since the Internet Box last booted",
+        )
+        col.update_counter(
+            name="internetbox_wan_tx_bytes",
+            value=stats["TxBytes"],
+            labels=labels,
+            description="Total bytes sent to the internet (uploaded) since the Internet Box last booted",
+        )
+
+    # ── Wi-Fi traffic (cumulative counters per radio) ─────────────────
+    @collector.register_collector
+    def collect_wifi_traffic(col: InternetBoxCollector) -> None:
+        for radio_id in range(2):
+            radio = json.loads(client.wifi.radio(radio_id)).get("status", {})
+            stats = json.loads(client.sysbus.net_dev_stats(f"wl{radio_id}")).get("status", {})
+            if not stats:
+                continue
+            labels = {"interface": f"wl{radio_id}", "radio_id": str(radio_id), "band": radio.get("OperatingFrequencyBand", "")}
+            col.update_counter(
+                name="internetbox_wifi_rx_bytes",
+                value=stats["RxBytes"],
+                labels=labels,
+                description="Total bytes received from Wi-Fi clients on this radio since the Internet Box last booted",
+            )
+            col.update_counter(
+                name="internetbox_wifi_tx_bytes",
+                value=stats["TxBytes"],
+                labels=labels,
+                description="Total bytes sent to Wi-Fi clients on this radio since the Internet Box last booted",
+            )

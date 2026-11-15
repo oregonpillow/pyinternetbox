@@ -40,6 +40,20 @@ class Sysbus(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/NeMo/Intf/veip0:getMIBs", data, auth_required=False)
 
+    def net_dev_stats(self, interface: str = "veip0") -> str:
+        """Get cumulative traffic counters (bytes, packets, errors) for a network interface.
+
+        Args:
+            interface (str): NeMo interface name. "veip0" is the XGS-PON WAN interface (all internet traffic),
+                "bridge" is the LAN bridge.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {}}
+        return self.post(f"/sysbus/NeMo/Intf/{interface}:getNetDevStats", data)
+
     def netmaster(self) -> str:
         """Get NetMaster status."""
         data = {"parameters": {}}
