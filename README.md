@@ -298,7 +298,22 @@ Pushing the tag runs [`release.yml`](https://github.com/oregonpillow/pyinternetb
 - creates a GitHub Release with auto-generated notes and the built packages
 
 Every push to `master` also publishes `oregonpillow/pyinternetbox:edge`. Untagged builds get a development version such as `0.2.1.dev3+g1a2b3c4`.
-Use plain `vMAJOR.MINOR.PATCH` tags.
+
+**Choosing the version** ([semver](https://semver.org/)): bump `PATCH` for bug fixes, `MINOR` for new endpoints/metrics/options, `MAJOR` for breaking changes. Use plain `vMAJOR.MINOR.PATCH` tags (no `-rc1` style suffixes). To see the version the current commit would get: `uv run ibox --version`.
+
+**If a release fails** before anything is published (e.g. tests fail), fix the problem on `master`, then move the tag:
+
+```sh
+git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+PyPI never accepts the same version twice, so if the package was already uploaded, release a new patch version (`v0.2.1`) instead.
+
+**One-time setup** (already done for this repo, kept here for reference):
+
+- GitHub → Settings → Secrets and variables → Actions: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub personal access token with _Read & Write_ access).
+- pypi.org → Account → Publishing: trusted publisher for owner `oregonpillow`, repository `pyinternetbox`, workflow `release.yml`, environment `pypi`.
 
 ## 🧪 Tests
 
