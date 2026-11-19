@@ -15,31 +15,78 @@ To also run destructive tests (write to the router)::
 
     uv run pytest tests/test_e2e.py -m destructive -v
 
-Mutating methods (``LED.set``, ``Wifi.power``, ``MST.set``) are marked
-``@pytest.mark.destructive`` and skipped by default. They are tested safely by
-first reading the current value from the router and writing the same value back,
-so the configuration is left unchanged after the test run.
+Tests that change settings are marked ``@pytest.mark.destructive``. They leave the configuration as they found it:
+they write the current value back (LED brightness, Wi-Fi TX power, firewall levels), or create something
+temporary and delete it again (a disabled port forwarding rule named ``DUMMY_RULE``, and a device entry, IP address
+reservation, schedule and time limit for ``FAKE_MAC``, which no real device uses). They skip rather than touch
+existing settings, e.g. a DMZ host.
+
+Tests that interrupt the network for everyone, such as turning Wi-Fi off and on, are also marked
+``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is set.
 """
 
 from __future__ import annotations
 
+import contextlib
+import ipaddress
 import json
+import socket
+import time
+from urllib.parse import urlsplit
 
 import pytest
+import requests
 
 from internetbox_client.resources import *  # noqa: F403
 from internetbox_client.utils.APIClient import SessionManager
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
+# Write tests give this locally administered MAC address, which no real device uses, a device entry, IP address
+# reservation, schedule and time limit, and name their port forwarding rule DUMMY_RULE, so existing settings are never
+# modified.
+FAKE_MAC = "02:00:00:00:00:01"
+DUMMY_RULE = "pyinternetbox-e2e"
+
 # ── Shared session fixture ────────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="session")
 def sm():
-    """Authenticated :class:`SessionManager` shared across the entire test session."""
-    with SessionManager() as session:
+    """Authenticated :class:`SessionManager` shared across the entire test session.
+
+    Uses its own application name so it doesn't end a web UI session open in a browser.
+    """
+    with SessionManager(application_name="pyinternetbox-e2e") as session:
         yield session
+
+
+@pytest.fixture(scope="session")
+def fake_mac(sm):
+    """FAKE_MAC, after checking that the router has nothing for it. Anything the tests leave for it is removed at the end."""
+    if uses := _uses(sm, FAKE_MAC):
+        pytest.skip(f"{FAKE_MAC} is in use on this router: {', '.join(uses)}")
+    yield FAKE_MAC
+    _forget(sm, FAKE_MAC)
+
+
+@pytest.fixture(scope="session")
+def free_ip(sm) -> str:
+    """A LAN address outside the DHCP pool that no device, lease, port forwarding rule or DMZ uses."""
+    lan = json.loads(_make(NMC, sm).lan_ip())["data"]
+    pool = range(int(ipaddress.ip_address(lan["DHCPMinAddress"])), int(ipaddress.ip_address(lan["DHCPMaxAddress"])) + 1)
+    used = {lan["Address"]}
+    for device in _lan_devices(sm):
+        used |= {device.get("IPAddress")} | {address.get("Address") for address in device.get("IPv4Address") or []}
+    used |= {lease["IPAddress"] for lease in json.loads(_make(DHCP, sm).static_leases())["status"]}
+    firewall = _make(Firewall, sm)
+    for rules in (json.loads(firewall.port_forwarding())["status"], json.loads(firewall.dmz())["status"]):
+        used |= {rule["DestinationIPAddress"] for rule in rules.values()}
+    network = ipaddress.ip_network(f"{lan['Address']}/{lan['Netmask']}", strict=False)
+    for host in reversed(list(network.hosts())):
+        if int(host) not in pool and str(host) not in used:
+            return str(host)
+    pytest.skip("No free LAN address outside the DHCP pool")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,6 +103,100 @@ def _make(cls, sm):
 def _ok(result: str) -> None:
     """Assert the call returned a string (HTTP 2xx confirmed via raise_for_status)."""
     assert isinstance(result, str)
+
+
+def _no_errors(result: str) -> dict:
+    """Assert the router accepted a call. It reports errors with HTTP 200 and an "errors" list."""
+    data = json.loads(result)
+    assert not data.get("errors"), data["errors"]
+    return data
+
+
+def _payload(result: str) -> dict:
+    """The settings in a response: some endpoints return them in "status", others in "data"."""
+    data = json.loads(result)
+    return data.get("status") or data.get("data") or {}
+
+
+@contextlib.contextmanager
+def _skip_if_unavailable():
+    """Skip the test if the router doesn't have the object it calls (HTTP 404) or refuses the call even for the admin
+    account (HTTP 401). Both depend on the model and firmware.
+
+    Only for endpoints known to vary: a misspelled endpoint also gives HTTP 404.
+    """
+    try:
+        yield
+    except requests.HTTPError as exc:
+        reasons = {404: "isn't on this router", 401: "is refused even for the admin account on this router"}
+        if exc.response is None or exc.response.status_code not in reasons:
+            raise
+        pytest.skip(f"{urlsplit(exc.response.url).path} {reasons[exc.response.status_code]} (HTTP {exc.response.status_code})")
+
+
+def _lan_devices(sm) -> list[dict]:
+    return json.loads(_make(Devices, sm).get(expression="lan and not self", flags=""))["status"]
+
+
+def _mst_id(mac: str) -> str:
+    return mac.replace(":", "").lower()
+
+
+def _mst_ids(sm) -> list[str]:
+    return (json.loads(_make(MST, sm).get()).get("data") or {}).get("ids", [])
+
+
+def _has_lease(sm, mac: str) -> bool:
+    return any(lease["MACAddress"].upper() == mac for lease in json.loads(_make(DHCP, sm).static_leases())["status"])
+
+
+def _uses(sm, mac: str) -> list[str]:
+    """What the router has for *mac*. An IP address reservation also creates a device entry."""
+    checks = {
+        "device": lambda: any(device["Key"] == mac for device in _lan_devices(sm)),
+        "IP address reservation": lambda: _has_lease(sm, mac),
+        "schedule": lambda: json.loads(_make(Scheduler, sm).device_schedule(mac)).get("status"),
+        "time limit": lambda: _mst_id(mac) in _mst_ids(sm),
+    }
+    return [use for use, check in checks.items() if check()]
+
+
+def _forget(sm, mac: str) -> None:
+    """Delete everything the router has for *mac*, in an order that doesn't bring the device entry back."""
+    if _has_lease(sm, mac):
+        _make(DHCP, sm).delete_static_lease(mac)  # creates the device entry if it's gone
+    if any(device["Key"] == mac for device in _lan_devices(sm)):
+        _make(Devices, sm).remove(mac)  # also deletes the schedule and time limit
+    else:
+        _make(Scheduler, sm).remove_device_schedule(mac)
+        if _mst_id(mac) in _mst_ids(sm):
+            _make(MST, sm).delete(mac)
+
+
+def _wait_for(condition, timeout: float = 10) -> bool:
+    """Poll *condition* until it's true or *timeout* seconds have passed: some changes take a moment to show."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.25)
+    return True
+
+
+def _port_forwards(firewall) -> dict[str, tuple]:
+    """Port forwarding rules by ID, reduced to their settings (their status can change on its own)."""
+    rules = json.loads(firewall.port_forwarding())["status"]
+    fields = ("Enable", "Protocol", "ExternalPort", "InternalPort", "DestinationIPAddress", "Description")
+    return {rule_id: tuple(rule[field] for field in fields) for rule_id, rule in rules.items()}
+
+
+def _runner_is_wired(sm) -> bool:
+    """Whether this machine reaches the router through an Ethernet port, not Wi-Fi (incl. a mesh extender's)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((urlsplit(sm.base_url).hostname, 443))
+        local_ip = probe.getsockname()[0]
+    me = next((device for device in _lan_devices(sm) if device.get("IPAddress") == local_ip), None)
+    return bool(me) and me.get("InterfaceName", "").lower().startswith("eth") and "wifi" not in (me.get("Tags") or "").split()
 
 
 # ── APServices ────────────────────────────────────────────────────────────────
@@ -150,6 +291,52 @@ class TestE2EDevices:
     def test_memory_status(self, svc):
         _ok(svc.memory_status())
 
+    @pytest.mark.destructive
+    def test_rename_remove(self, svc, sm, fake_mac, free_ip):
+        """Give FAKE_MAC a device entry (the router creates one for an IP address reservation), rename it, remove it."""
+
+        def device() -> dict | None:
+            return next((d for d in _lan_devices(sm) if d["Key"] == fake_mac), None)
+
+        try:
+            _no_errors(_make(DHCP, sm).add_static_lease(fake_mac, free_ip))
+            assert _wait_for(lambda: device() is not None)
+            _no_errors(svc.rename(fake_mac, "pyinternetbox-e2e"))
+            assert _wait_for(lambda: device()["Name"] == "pyinternetbox-e2e")
+            _no_errors(svc.remove(fake_mac))
+            assert device() is None
+        finally:
+            _forget(sm, fake_mac)
+        assert _uses(sm, fake_mac) == []
+
+    @pytest.mark.destructive
+    def test_wake_on_lan(self, svc, fake_mac):
+        _no_errors(svc.wake_on_lan(fake_mac))
+
+    @pytest.mark.destructive
+    def test_block_unblock(self, svc, sm, fake_mac):
+        """Block and unblock a device that doesn't exist, then remove the schedule and time limit that created."""
+        scheduler, mst = _make(Scheduler, sm), _make(MST, sm)
+        try:
+            info = _no_errors(svc.block(fake_mac))["data"]["scheduleInfo"]
+            assert (info["enable"], info["value"], info["schedule"]) == (True, "Disable", [{"state": "Disable", "begin": 0, "end": 604800}])
+            assert json.loads(mst.config(_mst_id(fake_mac)))["data"]["enable"] is True
+            info = _no_errors(svc.unblock(fake_mac))["data"]["scheduleInfo"]
+            assert (info["enable"], info["value"]) == (False, "Enable")
+            assert json.loads(mst.config(_mst_id(fake_mac)))["data"]["enable"] is False
+        finally:
+            if json.loads(scheduler.device_schedule(fake_mac)).get("status"):
+                scheduler.remove_device_schedule(fake_mac)
+            if _mst_id(fake_mac) in _mst_ids(sm):
+                mst.delete(fake_mac)
+        assert json.loads(scheduler.device_schedule(fake_mac))["status"] is False
+        assert _mst_id(fake_mac) not in _mst_ids(sm)
+
+    @pytest.mark.destructive
+    def test_unblock_without_parental_controls_creates_nothing(self, svc, sm, fake_mac):
+        assert json.loads(svc.unblock(fake_mac))["status"] is False
+        assert _mst_id(fake_mac) not in _mst_ids(sm)
+
 
 # ── DHCP ──────────────────────────────────────────────────────────────────────
 
@@ -167,6 +354,20 @@ class TestE2EDHCP:
 
     def test_ipv6_prefix_information(self, svc):
         _ok(svc.ipv6_prefix_information())
+
+    @pytest.mark.destructive
+    def test_static_lease_add_delete(self, svc, sm, fake_mac, free_ip):
+        def leases() -> dict[str, str]:
+            return {lease["MACAddress"].upper(): lease["IPAddress"] for lease in json.loads(svc.static_leases())["status"]}
+
+        try:
+            _no_errors(svc.add_static_lease(fake_mac, free_ip))
+            assert leases()[fake_mac] == free_ip
+            _no_errors(svc.delete_static_lease(fake_mac))
+            assert fake_mac not in leases()
+        finally:
+            _forget(sm, fake_mac)  # also the device entry the router created for the reservation
+        assert _uses(sm, fake_mac) == []
 
 
 # ── DNS ───────────────────────────────────────────────────────────────────────
@@ -293,6 +494,47 @@ class TestE2EFirewall:
 
     def test_custom_rule(self, svc):
         _ok(svc.custom_rule())
+
+    def test_level(self, svc):
+        _ok(svc.level())
+
+    @pytest.mark.destructive
+    def test_set_levels_reverts(self, svc):
+        """Write the current firewall levels back: effective no-op."""
+        v4, v6 = json.loads(svc.level())["status"], json.loads(svc.ipv6_level())["status"]
+        assert _no_errors(svc.set_level(v4))["status"] is True
+        assert _no_errors(svc.set_ipv6_level(v6))["status"] is True
+        assert (json.loads(svc.level())["status"], json.loads(svc.ipv6_level())["status"]) == (v4, v6)
+
+    @pytest.mark.destructive
+    def test_port_forwarding_add_update_delete(self, svc, free_ip):
+        """Add a disabled dummy rule, change it and delete it, leaving the other rules untouched."""
+        rule_id = f"webui_{DUMMY_RULE}"
+        before = _port_forwards(svc)
+        assert rule_id not in before
+        try:
+            created = _no_errors(svc.set_port_forwarding(DUMMY_RULE, free_ip, "65001", protocol="tcp", enabled=False))
+            assert created["status"] == rule_id
+            assert _port_forwards(svc)[rule_id] == (False, "6", "65001", "65001", free_ip, DUMMY_RULE)
+            _no_errors(svc.set_port_forwarding(DUMMY_RULE, free_ip, "65001-65002", "65011", enabled=False))
+            assert _port_forwards(svc)[rule_id][:4] == (False, "6,17", "65001-65002", "65011")
+            _no_errors(svc.delete_port_forwarding(DUMMY_RULE))
+        finally:
+            if rule_id in _port_forwards(svc):
+                svc.delete_port_forwarding(rule_id)
+        assert _port_forwards(svc) == before
+
+    @pytest.mark.destructive
+    def test_dmz_set_delete(self, svc, free_ip):
+        """Point the DMZ at an unused address, then remove it. Skipped if a DMZ host is already set."""
+        if json.loads(svc.dmz())["status"]:
+            pytest.skip("A DMZ host is set; not touching it")
+        try:
+            assert _no_errors(svc.set_dmz(free_ip))["status"] == "webui"
+            assert json.loads(svc.dmz())["status"]["webui"]["DestinationIPAddress"] == free_ip
+        finally:
+            svc.delete_dmz()
+        assert json.loads(svc.dmz())["status"] == {}
 
 
 # ── GenLog ────────────────────────────────────────────────────────────────────
@@ -526,6 +768,21 @@ class TestE2EScheduler:
     def test_complete_schedules(self, svc):
         _ok(svc.complete_schedules())
 
+    @pytest.mark.destructive
+    def test_device_schedule_set_enable_remove(self, svc, fake_mac):
+        periods = [{"begin": "Sun 22:00", "end": "Mon 07:00"}, {"begin": "Wed 12:00", "end": "Wed 13:30"}]
+        try:
+            _no_errors(svc.set_device_schedule(fake_mac, periods, enable=False))
+            info = json.loads(svc.device_schedule(fake_mac))["data"]["scheduleInfo"]
+            assert info["enable"] is False
+            assert [(p["begin"], p["end"]) for p in info["schedule"]] == [(0, 25200), (216000, 221400), (597600, 604800)]
+            _no_errors(svc.enable_device_schedule(fake_mac))
+            assert json.loads(svc.device_schedule(fake_mac))["data"]["scheduleInfo"]["enable"] is True
+        finally:
+            if json.loads(svc.device_schedule(fake_mac)).get("status"):
+                svc.remove_device_schedule(fake_mac)
+        assert json.loads(svc.device_schedule(fake_mac))["status"] is False
+
 
 # ── Security ──────────────────────────────────────────────────────────────────
 
@@ -536,10 +793,12 @@ class TestE2ESecurity:
         return _make(Security, sm)
 
     def test_gateway_status(self, svc):
-        _ok(svc.gateway_status())
+        with _skip_if_unavailable():
+            _ok(svc.gateway_status())
 
     def test_user_exposure_status(self, svc):
-        _ok(svc.user_exposure_status())
+        with _skip_if_unavailable():
+            _ok(svc.user_exposure_status())
 
     def test_package_management_status(self, svc):
         _ok(svc.package_management_status())
@@ -634,16 +893,27 @@ class TestE2EMST:
         _ok(svc.status())
 
     def test_config(self, svc):
-        _ok(svc.config("143fa619e252"))
+        ids = json.loads(svc.get()).get("data", {}).get("ids", [])
+        if not ids:
+            pytest.skip("No MST entries found on this router")
+        _ok(svc.config(ids[0]))
 
     def test_get(self, svc):
         _ok(svc.get())
 
-    # TODO: figure out valid payloads for MST.set()
-    # @pytest.mark.destructive
-    # def test_set(self, svc):
-    #     """set with empty parameters is effectively a no-op on the router."""
-    #     _ok(svc.set())
+    @pytest.mark.destructive
+    def test_set_delete(self, svc, sm, fake_mac):
+        try:
+            _no_errors(svc.set(fake_mac, enable=False, minutes_per_day=90))
+            _no_errors(svc.set(fake_mac, enable=False, allowed_time={"Saturday": 240}))
+            data = json.loads(svc.config(_mst_id(fake_mac)))["data"]
+            assert data["enable"] is False
+            assert data["allowedTime"] == {"Mon": 90, "Tue": 90, "Wed": 90, "Thu": 90, "Fri": 90, "Sat": 240, "Sun": 90}
+            _no_errors(svc.delete(fake_mac))
+        finally:
+            if _mst_id(fake_mac) in _mst_ids(sm):
+                svc.delete(fake_mac)
+        assert _mst_id(fake_mac) not in _mst_ids(sm)
 
     def test_stats(self, svc):
         ids = json.loads(svc.get()).get("data", {}).get("ids", [])
@@ -718,7 +988,8 @@ class TestE2EWebUI:
         _ok(svc.status())
 
     def test_release_notes(self, svc):
-        _ok(svc.release_notes())
+        with _skip_if_unavailable():
+            _ok(svc.release_notes())
 
 
 # ── Wifi ──────────────────────────────────────────────────────────────────────
@@ -805,6 +1076,56 @@ class TestE2EWifi:
 
     def test_activation_timer(self, svc):
         _ok(svc.activation_timer())
+
+    @pytest.mark.destructive
+    def test_set_guest_enabled_noop(self, svc):
+        """Turn the guest network off while it's off: no-op. Skipped if it's on."""
+        if _payload(svc.guest())["Enable"]:
+            pytest.skip("Guest Wi-Fi is on; not touching it")
+        _no_errors(svc.set_guest_enabled(False))
+        assert _payload(svc.guest())["Enable"] is False
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_guest_on_off(self, svc):
+        """Turn the guest network on with a 1-hour timer, then off again. Skipped if it's on."""
+        if _payload(svc.guest())["Enable"]:
+            pytest.skip("Guest Wi-Fi is on; not touching it")
+        timer = json.loads(svc.activation_timer())["status"]
+        try:
+            _no_errors(svc.set_guest_enabled(True, hours=1))
+            assert _payload(svc.guest())["Enable"] is True
+            assert json.loads(svc.activation_timer())["status"] != timer
+        finally:
+            svc.set_guest_enabled(False)
+            if json.loads(svc.activation_timer())["status"] != timer:
+                svc.post("/sysbus/NMC/WlanTimer:setActivationTimer", {"parameters": {"InterfaceName": "guest", "Timeout": timer}})
+        assert _payload(svc.guest())["Enable"] is False
+        assert json.loads(svc.activation_timer())["status"] == timer
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_enabled_off_on(self, svc, sm):
+        """Turn all Wi-Fi off, then on again: wireless devices lose their connection meanwhile.
+
+        The guest network stays off afterwards, so it's turned back on if it was on.
+        """
+        if not _runner_is_wired(sm):
+            pytest.skip("This machine isn't wired to the router, so it couldn't turn Wi-Fi back on")
+        if not _payload(svc.status())["Enable"]:
+            pytest.skip("Wi-Fi is off; not touching it")
+        guest_on = _payload(svc.guest())["Enable"]
+        if guest_on and json.loads(svc.activation_timer())["status"]:
+            pytest.skip("Guest Wi-Fi is on with a timer, which this test couldn't restore")
+        try:
+            _no_errors(svc.set_enabled(False))
+            assert _payload(svc.status())["Enable"] is False
+        finally:
+            svc.set_enabled(True)
+            if guest_on:
+                svc.set_guest_enabled(True)
+        assert _payload(svc.status())["Enable"] is True
+        assert _payload(svc.guest())["Enable"] is guest_on
 
 
 # ── Wireguard ─────────────────────────────────────────────────────────────────

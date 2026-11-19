@@ -163,6 +163,158 @@ class TestDevices:
         svc.memory_status()
         assert mock_session_manager.post.call_args[0][0] == "/sysbus/DeviceInfo/MemoryStatus:get"
 
+    @pytest.mark.parametrize("key,service", [("aa-bb-cc-dd-ee-ff", "Devices.Device.AA:BB:CC:DD:EE:FF"), ("HGW", "Devices.Device.HGW")])
+    def test_rename(self, mock_session_manager: MagicMock, key: str, service: str) -> None:
+        """Keys are case-sensitive: MAC addresses are normalised to the router's upper case, other keys pass unchanged."""
+        svc = _make_resource(Devices, mock_session_manager)
+        svc.rename(key, "Laptop")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/ws",
+            {"service": service, "method": "set", "parameters": {"parameters": {"Name": "Laptop"}}},
+        )
+
+    def test_wake_on_lan(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Devices, mock_session_manager)
+        svc.wake_on_lan("aa:bb:cc:dd:ee:ff")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/WOL:sendWakeOnLan",
+            {"parameters": {"hostID": "AA:BB:CC:DD:EE:FF", "broadcast": True, "retries": 3, "interval": 60000}},
+        )
+
+
+class TestDevicesRemove:
+    """remove() deletes the device's settings first, like the web UI, then the device entry."""
+
+    MAC = "AA:BB:CC:DD:EE:FF"
+    OFFLINE = '{"status": {"Key": "AA:BB:CC:DD:EE:FF", "Active": false}}'
+
+    @staticmethod
+    def _calls(sm: MagicMock) -> list[str]:
+        """Each call as "Service:method", whether it went to /sysbus/... or to /ws."""
+        return [
+            f"{c[0][1]['service']}:{c[0][1]['method']}" if c[0][0] == "/ws" else c[0][0].removeprefix("/sysbus/")
+            for c in sm.post.call_args_list
+        ]
+
+    def test_remove_deletes_settings_then_device(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [
+            self.OFFLINE,
+            '{"status": [{"MACAddress": "AA:BB:CC:DD:EE:FF", "IPAddress": "192.168.1.20"}]}',
+            '{"status": null}',
+            '{"status": true, "data": {"scheduleInfo": {"enable": true}}}',
+            '{"status": true}',
+            '{"status": true}',
+            '{"status": null, "data": {"ids": ["aabbccddeeff"]}}',
+            '{"status": null}',
+            '{"status": true}',
+        ]
+        result = _make_resource(Devices, mock_session_manager).remove("aa:bb:cc:dd:ee:ff")
+        assert self._calls(mock_session_manager) == [
+            f"Devices.Device.{self.MAC}:get",
+            "DHCPv4/Server/Pool/default:getStaticLeases",
+            "DHCPv4/Server/Pool/default:deleteStaticLease",
+            "Scheduler:getSchedule",
+            "Scheduler:enableSchedule",
+            "Scheduler:removeSchedules",
+            "ToD:listMST",
+            "ToD:deleteMST",
+            "Devices:destroyDevice",
+        ]
+        assert mock_session_manager.post.call_args[0][1]["parameters"] == {"key": self.MAC}
+        assert result == '{"status": true}'
+
+    def test_remove_skips_missing_reservation_and_time_limit(self, mock_session_manager: MagicMock) -> None:
+        """Deleting a reservation or time limit that doesn't exist fails with HTTP 404, so those calls are skipped."""
+        mock_session_manager.post.side_effect = [
+            self.OFFLINE,
+            '{"status": [{"MACAddress": "11:22:33:44:55:66", "IPAddress": "192.168.1.20"}]}',
+            '{"status": false}',
+            '{"status": true}',
+            '{"status": null, "data": {"ids": []}}',
+            '{"status": true}',
+        ]
+        _make_resource(Devices, mock_session_manager).remove(self.MAC)
+        assert self._calls(mock_session_manager) == [
+            f"Devices.Device.{self.MAC}:get",
+            "DHCPv4/Server/Pool/default:getStaticLeases",
+            "Scheduler:getSchedule",
+            "Scheduler:removeSchedules",
+            "ToD:listMST",
+            "Devices:destroyDevice",
+        ]
+
+    def test_remove_refuses_connected_device(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.return_value = '{"status": {"Key": "AA:BB:CC:DD:EE:FF", "Active": true}}'
+        with pytest.raises(ValueError, match="is connected"):
+            _make_resource(Devices, mock_session_manager).remove(self.MAC)
+        assert self._calls(mock_session_manager) == [f"Devices.Device.{self.MAC}:get"]
+
+
+class TestDevicesParentalControls:
+    """block/unblock combine schedule and time-limit calls, like the web UI's "Internet access blocked" switch."""
+
+    MAC = "AA:BB:CC:DD:EE:FF"
+    NO_SCHEDULE = '{"status": false}'
+    SCHEDULE = '{"status": true, "data": {"scheduleInfo": {"ID": "AA:BB:CC:DD:EE:FF", "enable": true, "value": "Disable"}}}'
+
+    @staticmethod
+    def _endpoints(sm: MagicMock) -> list[str]:
+        return [c[0][0].removeprefix("/sysbus/") for c in sm.post.call_args_list]
+
+    @staticmethod
+    def _payload(sm: MagicMock, endpoint: str) -> dict:
+        return next(c[0][1]["parameters"] for c in sm.post.call_args_list if c[0][0] == f"/sysbus/{endpoint}")
+
+    def test_block_without_schedule_creates_all_week_block(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [self.NO_SCHEDULE, '{"status": true}', '{"status": null}', self.SCHEDULE]
+        result = _make_resource(Devices, mock_session_manager).block("aa-bb-cc-dd-ee-ff")
+        assert self._endpoints(mock_session_manager) == [
+            "Scheduler:getSchedule",
+            "Scheduler:addSchedule",
+            "ToD:setMST",
+            "Scheduler:getSchedule",
+        ]
+        info = self._payload(mock_session_manager, "Scheduler:addSchedule")["info"]
+        assert (info["ID"], info["enable"], info["schedule"]) == (self.MAC, True, [{"begin": 0, "end": 604800, "state": "Disable"}])
+        assert self._payload(mock_session_manager, "ToD:setMST") == {"id": "aabbccddeeff", "subject": f"MAC:{self.MAC}", "enable": True}
+        assert result == self.SCHEDULE
+
+    def test_block_with_schedule_enables_it(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [self.SCHEDULE, '{"status": true}', '{"status": null}', self.SCHEDULE]
+        _make_resource(Devices, mock_session_manager).block(self.MAC)
+        assert self._endpoints(mock_session_manager) == [
+            "Scheduler:getSchedule",
+            "Scheduler:enableSchedule",
+            "ToD:setMST",
+            "Scheduler:getSchedule",
+        ]
+        assert self._payload(mock_session_manager, "Scheduler:enableSchedule") == {"type": "ToD", "ID": self.MAC, "enable": True}
+
+    def test_unblock_turns_off_schedule_and_time_limit(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [
+            self.SCHEDULE,
+            '{"status": true}',
+            '{"status": null, "data": {"ids": ["aabbccddeeff"]}}',
+            '{"status": null}',
+            self.SCHEDULE,
+        ]
+        _make_resource(Devices, mock_session_manager).unblock(self.MAC)
+        assert self._endpoints(mock_session_manager) == [
+            "Scheduler:getSchedule",
+            "Scheduler:enableSchedule",
+            "ToD:listMST",
+            "ToD:setMST",
+            "Scheduler:getSchedule",
+        ]
+        assert self._payload(mock_session_manager, "Scheduler:enableSchedule")["enable"] is False
+        assert self._payload(mock_session_manager, "ToD:setMST")["enable"] is False
+
+    def test_unblock_without_parental_controls_creates_nothing(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [self.NO_SCHEDULE, '{"status": null, "data": {"ids": ["112233445566"]}}', self.NO_SCHEDULE]
+        result = _make_resource(Devices, mock_session_manager).unblock(self.MAC)
+        assert self._endpoints(mock_session_manager) == ["Scheduler:getSchedule", "ToD:listMST", "Scheduler:getSchedule"]
+        assert result == self.NO_SCHEDULE
+
 
 # ── DHCP ──────────────────────────────────────────────────────────────
 
@@ -180,6 +332,28 @@ class TestDHCP:
         svc = _make_resource(DHCP, mock_session_manager)
         getattr(svc, method)()
         assert mock_session_manager.post.call_args[0][0] == endpoint
+
+    def test_add_static_lease_normalises_mac(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(DHCP, mock_session_manager)
+        svc.add_static_lease("aa-bb-cc-dd-ee-ff", "192.168.1.20")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/DHCPv4/Server/Pool/default:addStaticLease",
+            {"parameters": {"MACAddress": "AA:BB:CC:DD:EE:FF", "IPAddress": "192.168.1.20"}},
+        )
+
+    def test_delete_static_lease(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(DHCP, mock_session_manager)
+        svc.delete_static_lease("aa:bb:cc:dd:ee:ff")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/DHCPv4/Server/Pool/default:deleteStaticLease",
+            {"parameters": {"MACAddress": "AA:BB:CC:DD:EE:FF"}},
+        )
+
+    def test_static_lease_rejects_invalid_mac(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(DHCP, mock_session_manager)
+        with pytest.raises(ValueError, match="Not a MAC address"):
+            svc.add_static_lease("printer", "192.168.1.20")
+        mock_session_manager.post.assert_not_called()
 
 
 # ── DNS ───────────────────────────────────────────────────────────────
@@ -304,15 +478,95 @@ class TestFirewall:
         "method,endpoint",
         [
             ("dmz", "/sysbus/Firewall:getDMZ"),
+            ("level", "/sysbus/Firewall:getFirewallLevel"),
             ("ipv6_level", "/sysbus/Firewall:getFirewallIPv6Level"),
             ("port_forwarding", "/sysbus/Firewall:getPortForwarding"),
             ("custom_rule", "/sysbus/Firewall:getCustomRule"),
+            ("delete_dmz", "/sysbus/Firewall:deleteDMZ"),
         ],
     )
     def test_endpoints(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
         svc = _make_resource(Firewall, mock_session_manager)
         getattr(svc, method)()
         assert mock_session_manager.post.call_args[0][0] == endpoint
+
+    @pytest.mark.parametrize(
+        "method,endpoint,level",
+        [("set_level", "/sysbus/Firewall:setFirewallLevel", "Low"), ("set_ipv6_level", "/sysbus/Firewall:setFirewallIPv6Level", "Off")],
+    )
+    def test_set_levels(self, mock_session_manager: MagicMock, method: str, endpoint: str, level: str) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        getattr(svc, method)(level)
+        assert mock_session_manager.post.call_args[0][:2] == (endpoint, {"parameters": {"level": level}})
+
+    def test_set_port_forwarding_payload_then_commit(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = ['{"status": "webui_minecraft"}', '{"status": true}']
+        svc = _make_resource(Firewall, mock_session_manager)
+        result = svc.set_port_forwarding("minecraft", "192.168.1.20", 25565)
+        (set_call, commit_call) = mock_session_manager.post.call_args_list
+        assert set_call[0][0] == "/sysbus/Firewall:setPortForwarding"
+        assert set_call[0][1] == {
+            "parameters": {
+                "id": "minecraft",
+                "description": "minecraft",
+                "persistent": True,
+                "origin": "webui",
+                "sourceInterface": "data",
+                "sourcePrefix": "",
+                "enable": True,
+                "protocol": "6,17",
+                "destinationIPAddress": "192.168.1.20",
+                "externalPort": "25565",
+                "internalPort": "25565",
+            }
+        }
+        assert commit_call[0][:2] == ("/sysbus/Firewall:commit", {"parameters": {}})
+        assert result == '{"status": "webui_minecraft"}'
+
+    @pytest.mark.parametrize("protocol,code", [("tcp", "6"), ("udp", "17"), ("both", "6,17")])
+    def test_set_port_forwarding_options(self, mock_session_manager: MagicMock, protocol: str, code: str) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_port_forwarding("web", "192.168.1.20", "8000-8010", "9000", protocol=protocol, enabled=False)
+        params = mock_session_manager.post.call_args_list[0][0][1]["parameters"]
+        assert (params["protocol"], params["externalPort"], params["internalPort"], params["enable"]) == (code, "8000-8010", "9000", False)
+
+    @pytest.mark.parametrize("external,internal", [("8000-8010", None), ("8000-8010", "8000-8010"), ("80", "8080")])
+    def test_set_port_forwarding_accepted_port_combinations(
+        self, mock_session_manager: MagicMock, external: str, internal: str | None
+    ) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_port_forwarding("web", "192.168.1.20", external, internal)
+        params = mock_session_manager.post.call_args_list[0][0][1]["parameters"]
+        assert (params["externalPort"], params["internalPort"]) == (external, internal or external)
+
+    @pytest.mark.parametrize("external,internal", [("8000-8010", "9000-9010"), ("80", "8080-8081")])
+    def test_set_port_forwarding_rejects_other_internal_range(self, mock_session_manager: MagicMock, external: str, internal: str) -> None:
+        """The router only forwards a range to the same range or to a single port ("Invalid port-range" otherwise)."""
+        svc = _make_resource(Firewall, mock_session_manager)
+        with pytest.raises(ValueError, match="same range"):
+            svc.set_port_forwarding("web", "192.168.1.20", external, internal)
+        mock_session_manager.post.assert_not_called()
+
+    def test_set_port_forwarding_rejects_unknown_protocol(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        with pytest.raises(ValueError, match="protocol"):
+            svc.set_port_forwarding("web", "192.168.1.20", "80", protocol="icmp")
+        mock_session_manager.post.assert_not_called()
+
+    def test_delete_port_forwarding_then_commit(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.delete_port_forwarding("webui_minecraft")
+        (delete_call, commit_call) = mock_session_manager.post.call_args_list
+        assert delete_call[0][:2] == ("/sysbus/Firewall:deletePortForwarding", {"parameters": {"id": "webui_minecraft", "origin": "webui"}})
+        assert commit_call[0][0] == "/sysbus/Firewall:commit"
+
+    def test_set_dmz(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_dmz("192.168.1.20")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Firewall:setDMZ",
+            {"parameters": {"id": "webui", "sourceInterface": "data", "destinationIPAddress": "192.168.1.20", "enable": True}},
+        )
 
 
 # ── GenLog ────────────────────────────────────────────────────────────
@@ -470,6 +724,11 @@ class TestNMC:
         svc.bdd()
         data = mock_session_manager.post.call_args[0][1]
         assert data["service"] == "NMC.BDD"
+
+    def test_reboot(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(NMC, mock_session_manager)
+        svc.reboot()
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/NMC:reboot", {"parameters": {"reason": "pyinternetbox"}})
 
 
 # ── Simple resource classes ───────────────────────────────────────────
@@ -646,13 +905,112 @@ class TestSysbus:
         assert mock_session_manager.post.call_args[0][0] == "/sysbus/NeMo/Intf/bridge:getNetDevStats"
 
 
+# ── Scheduler ─────────────────────────────────────────────────────────
+
+
+class TestScheduler:
+    MAC = "AA:BB:CC:DD:EE:FF"
+
+    def test_device_schedule(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Scheduler, mock_session_manager)
+        svc.device_schedule("aa:bb:cc:dd:ee:ff")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Scheduler:getSchedule",
+            {"parameters": {"type": "ToD", "ID": self.MAC}},
+        )
+
+    def test_remove_device_schedule_never_sends_empty_id(self, mock_session_manager: MagicMock) -> None:
+        """removeSchedules without an ID would delete every device's schedule."""
+        svc = _make_resource(Scheduler, mock_session_manager)
+        with pytest.raises(ValueError):
+            svc.remove_device_schedule("")
+        mock_session_manager.post.assert_not_called()
+
+    def test_remove_device_schedule_turns_it_off_first(self, mock_session_manager: MagicMock) -> None:
+        """The router ignores the removal of a schedule turned on with enableSchedule until it's turned off again."""
+        mock_session_manager.post.side_effect = [
+            '{"status": true, "data": {"scheduleInfo": {"enable": true}}}',
+            '{"status": true}',
+            '{"status": true}',
+        ]
+        svc = _make_resource(Scheduler, mock_session_manager)
+        assert svc.remove_device_schedule("aa:bb:cc:dd:ee:ff") == '{"status": true}'
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [
+            ("/sysbus/Scheduler:getSchedule", {"parameters": {"type": "ToD", "ID": self.MAC}}),
+            ("/sysbus/Scheduler:enableSchedule", {"parameters": {"type": "ToD", "ID": self.MAC, "enable": False}}),
+            ("/sysbus/Scheduler:removeSchedules", {"parameters": {"type": "ToD", "ID": self.MAC}}),
+        ]
+
+    def test_remove_device_schedule_without_schedule(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = ['{"status": false}', '{"status": true}']
+        _make_resource(Scheduler, mock_session_manager).remove_device_schedule(self.MAC)
+        assert [c[0][0] for c in mock_session_manager.post.call_args_list] == [
+            "/sysbus/Scheduler:getSchedule",
+            "/sysbus/Scheduler:removeSchedules",
+        ]
+
+    def test_enable_device_schedule(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Scheduler, mock_session_manager)
+        svc.enable_device_schedule(self.MAC, False)
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Scheduler:enableSchedule",
+            {"parameters": {"type": "ToD", "ID": self.MAC, "enable": False}},
+        )
+
+    def test_set_device_schedule_payload(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Scheduler, mock_session_manager)
+        svc.set_device_schedule(self.MAC, [{"begin": "Mon 22:00", "end": "Tue 07:00"}], enable=False)
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Scheduler:addSchedule",
+            {
+                "parameters": {
+                    "type": "ToD",
+                    "info": {
+                        "ID": self.MAC,
+                        "enable": False,
+                        "base": "Weekly",
+                        "def": "Enable",
+                        "override": "",
+                        "schedule": [{"begin": 79200, "end": 111600, "state": "Disable"}],
+                    },
+                }
+            },
+        )
+
+    @pytest.mark.parametrize(
+        "periods,expected",
+        [
+            ([], []),
+            ([{"begin": "Mon 00:00", "end": "Sun 24:00"}], [(0, 604800)]),
+            ([{"begin": "saturday 9:30", "end": "Sat 12:00"}], [(466200, 475200)]),
+            ([{"begin": "Sun 22:00", "end": "Mon 07:00"}], [(0, 25200), (597600, 604800)]),  # wraps past Sunday midnight
+            ([{"begin": 3600, "end": 7200}, {"begin": "Mon 01:30", "end": "Mon 03:00"}], [(3600, 10800)]),  # overlap
+            ([{"begin": "7200", "end": 10800}, {"begin": 0, "end": 7200}], [(0, 10800)]),  # adjacent, unsorted
+            ([{"begin": 100, "end": 100}], []),  # empty
+        ],
+    )
+    def test_blocked_periods(self, mock_session_manager: MagicMock, periods: list, expected: list) -> None:
+        svc = _make_resource(Scheduler, mock_session_manager)
+        svc.set_device_schedule(self.MAC, periods)
+        schedule = mock_session_manager.post.call_args[0][1]["parameters"]["info"]["schedule"]
+        assert [(p["begin"], p["end"]) for p in schedule] == expected
+        assert all(p["state"] == "Disable" for p in schedule)
+
+    @pytest.mark.parametrize("bad", ["Mon", "Funday 10:00", "Mon 24:30", "Mon 10:60", -1, 604801])
+    def test_invalid_times_raise(self, mock_session_manager: MagicMock, bad: object) -> None:
+        svc = _make_resource(Scheduler, mock_session_manager)
+        with pytest.raises(ValueError):
+            svc.set_device_schedule(self.MAC, [{"begin": bad, "end": 604800}])
+        mock_session_manager.post.assert_not_called()
+
+
 # ── MST ───────────────────────────────────────────────────────────────
 
 
 class TestMST:
-    @pytest.mark.parametrize(
-        "method,endpoint", [("status", "/sysbus/ToD/MaxSurfTime:get"), ("get", "/sysbus/ToD:listMST"), ("set", "/sysbus/ToD:setMST")]
-    )
+    DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+    @pytest.mark.parametrize("method,endpoint", [("status", "/sysbus/ToD/MaxSurfTime:get"), ("get", "/sysbus/ToD:listMST")])
     def test_endpoints(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
         svc = _make_resource(MST, mock_session_manager)
         getattr(svc, method)()
@@ -667,6 +1025,48 @@ class TestMST:
         svc = _make_resource(MST, mock_session_manager)
         svc.stats(id="abc123")
         assert mock_session_manager.post.call_args[0][0] == "/sysbus/ToD:statsMST"
+
+    def test_set_minutes_per_day(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(MST, mock_session_manager)
+        svc.set("aa:bb:cc:dd:ee:ff", minutes_per_day=90)
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/ToD:setMST",
+            {
+                "parameters": {
+                    "id": "aabbccddeeff",
+                    "subject": "MAC:AA:BB:CC:DD:EE:FF",
+                    "enable": True,
+                    "allowedTime": dict.fromkeys(self.DAYS, 90),
+                }
+            },
+        )
+
+    def test_set_allowed_time_overrides_given_days(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(MST, mock_session_manager)
+        svc.set("AA:BB:CC:DD:EE:FF", minutes_per_day=60, allowed_time={"saturday": 240, "Sun": 240})
+        allowed = mock_session_manager.post.call_args[0][1]["parameters"]["allowedTime"]
+        assert allowed == {**dict.fromkeys(self.DAYS, 60), "Sat": 240, "Sun": 240}
+
+    def test_set_without_times_keeps_current_limit(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(MST, mock_session_manager)
+        svc.set("aabbccddeeff", enable=False)  # an MST entry ID works too
+        params = mock_session_manager.post.call_args[0][1]["parameters"]
+        assert params == {"id": "aabbccddeeff", "subject": "MAC:AA:BB:CC:DD:EE:FF", "enable": False}
+
+    @pytest.mark.parametrize(
+        "kwargs,error",
+        [({"minutes_per_day": 1441}, "1440"), ({"minutes_per_day": -1}, "1440"), ({"allowed_time": {"Funday": 10}}, "Unknown day")],
+    )
+    def test_set_rejects_invalid_limits(self, mock_session_manager: MagicMock, kwargs: dict, error: str) -> None:
+        svc = _make_resource(MST, mock_session_manager)
+        with pytest.raises(ValueError, match=error):
+            svc.set("aa:bb:cc:dd:ee:ff", **kwargs)
+        mock_session_manager.post.assert_not_called()
+
+    def test_delete(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(MST, mock_session_manager)
+        svc.delete("AA:BB:CC:DD:EE:FF")
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/ToD:deleteMST", {"parameters": {"id": "aabbccddeeff"}})
 
 
 # ── Voice ─────────────────────────────────────────────────────────────
@@ -715,6 +1115,36 @@ class TestWifi:
         svc = _make_resource(Wifi, mock_session_manager)
         svc.station_stats(id=0)
         assert mock_session_manager.post.call_args[0][0] == "/sysbus/NeMo/Intf/wl0:getStationStats"
+
+    def test_set_enabled_keeps_configuration_mode(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [
+            '{"status": null, "data": {"Enable": true, "Status": true, "ConfigurationMode": true}}',
+            '{"status": true}',
+        ]
+        svc = _make_resource(Wifi, mock_session_manager)
+        assert svc.set_enabled(False) == '{"status": true}'
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/NMC/Wifi:set",
+            {"parameters": {"Enable": False, "Status": False, "ConfigurationMode": True}},
+        )
+
+    def test_set_enabled_without_configuration_mode(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Wifi, mock_session_manager)
+        svc.set_enabled(True)
+        assert mock_session_manager.post.call_args[0][1] == {"parameters": {"Enable": True, "Status": True}}
+
+    def test_set_guest_enabled_sets_timer(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Wifi, mock_session_manager)
+        svc.set_guest_enabled(True, hours=4)
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [
+            ("/sysbus/NMC/Guest:set", {"parameters": {"Enable": True}}),
+            ("/sysbus/NMC/WlanTimer:setActivationTimer", {"parameters": {"InterfaceName": "guest", "Timeout": 4}}),
+        ]
+
+    def test_set_guest_disabled_skips_timer(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Wifi, mock_session_manager)
+        svc.set_guest_enabled(False)
+        mock_session_manager.post.assert_called_once_with("/sysbus/NMC/Guest:set", {"parameters": {"Enable": False}}, True)
 
 
 # ── WWAN ──────────────────────────────────────────────────────────────

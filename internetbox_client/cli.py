@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import collections.abc
 import contextlib
 import inspect
 import json
 import threading
+import types
 import typing
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Annotated, NoReturn, Optional
@@ -88,6 +90,19 @@ def _friendly_errors() -> Iterator[None]:
         _fail(f"{_hostname} accepted the connection but did not answer in time.", hint=True)
     except requests.exceptions.ConnectionError as exc:
         _fail(f"Could not connect to {_hostname}: {exc}", hint=True)
+    except requests.exceptions.HTTPError as exc:
+        _fail(f"The router rejected the request: {exc}{_router_errors(exc.response)}")
+    except ValueError as exc:  # invalid input caught by a resource method, e.g. a malformed MAC address
+        _fail(str(exc))
+
+
+def _router_errors(response: requests.Response | None) -> str:
+    """The router's reasons from an error response, e.g. "Invalid port-range (InternalPort, ExternalPort)", as an extra line."""
+    try:
+        reasons = "; ".join(f"{error.get('description')} ({error.get('info')})" for error in response.json()["errors"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return ""
+    return f"\nRouter says: {reasons}" if reasons else ""
 
 
 def _fail(message: str, hint: bool = False) -> NoReturn:
@@ -99,10 +114,33 @@ def _fail(message: str, hint: bool = False) -> NoReturn:
 
 # ── Dynamic CLI generation ────────────────────────────────────────────
 
+# Commands that ask before running, unless given --yes: the question, and whether to ask, given the method's arguments.
+_CONFIRM = {
+    ("nmc", "reboot"): ("Restart the router? Internet, Wi-Fi and phone will be down for a few minutes.", lambda args: True),
+    ("wifi", "set_enabled"): (
+        "Turn off all Wi-Fi networks? Every wireless device will lose its connection, including this computer if it's on Wi-Fi.",
+        lambda args: not args["enable"],
+    ),
+}
+
+
+def _base_type(ann: object) -> object:
+    """Reduce an annotation to what the CLI needs, e.g. ``dict[str, int] | None`` -> ``dict``."""
+    if isinstance(ann, types.UnionType) or typing.get_origin(ann) is typing.Union:
+        args = [a for a in typing.get_args(ann) if a is not type(None)]
+        if len(args) == 1:
+            ann = args[0]
+    origin = typing.get_origin(ann)
+    if origin in (list, collections.abc.Sequence):
+        return list
+    if origin in (dict, collections.abc.Mapping):
+        return dict
+    return ann
+
 
 def _typer_annotation(param: inspect.Parameter) -> type:
     """Map a resource-method parameter annotation to a Typer-friendly type."""
-    ann = param.annotation
+    ann = _base_type(param.annotation)
     if ann in (int, float, str, bool):
         return ann
     # dict, list, Literal, and anything else → accept as string on the CLI
@@ -111,24 +149,30 @@ def _typer_annotation(param: inspect.Parameter) -> type:
 
 def _typer_help(pname: str, param: inspect.Parameter) -> str:
     """Build a short help string for a CLI parameter."""
-    ann = param.annotation
+    ann = _base_type(param.annotation)
     help_str = pname.replace("_", " ").title()
     if ann is list:
         help_str += " (comma-separated or JSON array)"
+    elif ann is dict:
+        help_str += " (JSON object)"
     elif getattr(ann, "__origin__", None) is typing.Literal:
         help_str += f" (choices: {list(ann.__args__)})"
+    elif ann is bool and param.default is inspect.Parameter.empty:  # options are --x/--no-x flags instead
+        help_str += " (true or false)"
     return help_str
 
 
-def _coerce_value(val: str, ann: type) -> object:
+def _coerce_value(val: str, ann: object) -> object:
     """Coerce a CLI string value to the target annotation type."""
-    if ann in (dict, list):
+    ann = _base_type(ann)
+    if ann is dict:
         return json.loads(val)
     if ann is list:
         try:
-            return json.loads(val)
-        except (json.JSONDecodeError, ValueError):
-            return [v.strip() for v in val.split(",") if v.strip()]
+            parsed = json.loads(val)
+        except ValueError:
+            parsed = None
+        return parsed if isinstance(parsed, list) else [v.strip() for v in val.split(",") if v.strip()]
     if ann in (int, float):
         return ann(val)
     if getattr(ann, "__origin__", None) is typing.Literal:
@@ -152,14 +196,21 @@ def _build_command_func(attr_name: str, method_name: str, params: list[tuple[str
         has_default = param.default is not inspect.Parameter.empty
 
         if has_default:
-            # Typer Option
+            # Typer Option. Booleans get an explicit --x/--no-x pair: a lone --x flag with a True default would
+            # set the value to False when given.
+            flag = f"--{pname.replace('_', '-')}"
+            decl = f"{flag}/--no-{flag[2:]}" if ann_type is bool else flag
             sig_parts.append(
                 f"{pname}: Annotated[Optional[{ann_type.__name__}], "
-                f'typer.Option("--{pname.replace("_", "-")}", help={help_str!r}, show_default=True)] = {param.default!r}'
+                f"typer.Option({decl!r}, help={help_str!r}, show_default=True)] = {param.default!r}"
             )
         else:
             # Typer Argument
             sig_parts.append(f"{pname}: Annotated[{ann_type.__name__}, typer.Argument(help={help_str!r})]")
+
+    question, needs_confirmation = _CONFIRM.get((attr_name, method_name), (None, None))
+    if question:
+        sig_parts.append('yes: Annotated[bool, typer.Option("--yes", "-y", help="Don\'t ask for confirmation.")] = False')
 
     sig = ", ".join(sig_parts)
     func_src = f"def cmd({sig}):\n    _invoke({attr_name!r}, {method_name!r}, locals())\n"
@@ -179,14 +230,19 @@ def _build_command_func(attr_name: str, method_name: str, params: list[tuple[str
 
     # Wire up the actual invocation logic (closure, not exec'd)
     def _invoke(a: str, m: str, local_values: dict) -> None:
+        call_kwargs = {}
+        for pname, param in params:
+            val = local_values.get(pname)
+            if val is not None:
+                try:
+                    val = _coerce_value(val, param.annotation)
+                except ValueError as exc:
+                    raise typer.BadParameter(str(exc), param_hint=f"'{pname}'") from exc
+            call_kwargs[pname] = val
+        if question and needs_confirmation(call_kwargs) and not local_values["yes"]:
+            typer.confirm(question, abort=True)
         with _friendly_errors(), _make_client() as client:
             resource = getattr(client, a)
-            call_kwargs = {}
-            for pname, param in params:
-                val = local_values.get(pname)
-                if val is not None:
-                    val = _coerce_value(val, param.annotation)
-                call_kwargs[pname] = val
             _output(getattr(resource, m)(**call_kwargs))
 
     ns["_invoke"] = _invoke
@@ -199,7 +255,7 @@ def _register_command(
     """Register a single CLI command, with or without parameters."""
     cli_name = method_name.replace("_", "-")
 
-    if not params:
+    if not params and (attr_name, method_name) not in _CONFIRM:
 
         def _make_no_param_cmd(a: str = attr_name, m: str = method_name):
             @group.command(name=cli_name, help=help_text)
@@ -246,7 +302,7 @@ def _build_cli() -> None:
             if method_name.startswith("_") or (method_name in api_client_methods and method_name not in cls.__dict__):
                 continue
 
-            sig = inspect.signature(method)
+            sig = inspect.signature(method, eval_str=True)  # resolve string annotations (from __future__ import annotations)
             doc = (method.__doc__ or "").strip().split("\n")[0]  # Use first line of docstring as command help
             # doc = inspect.cleandoc(method.__doc__ or "")  # Use full cleaned docstring as command help
             params = [(n, p) for n, p in sig.parameters.items() if n != "self"]

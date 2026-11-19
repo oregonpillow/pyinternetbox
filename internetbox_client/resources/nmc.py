@@ -29,6 +29,19 @@ class NMC(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/NMC:getLANIP", data)
 
+    def reboot(self, reason: str = "pyinternetbox") -> str:
+        """Restart the router. Internet, Wi-Fi and phone are down for a few minutes.
+
+        Args:
+            reason (str): reason sent to the router (the web UI sends "WebUI"). Default is "pyinternetbox".
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"reason": reason}}
+        return self.post("/sysbus/NMC:reboot", data)
+
     def phonebook_backup(self) -> str:
         """Get phonebook backup status"""
         data = {"parameters": {}}

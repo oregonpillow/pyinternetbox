@@ -75,7 +75,8 @@ addopts = "--ignore=tests/test_e2e.py --cov-fail-under 85"
 
 markers = [
     "e2e: end-to-end integration tests against a live Internet Box gateway",
-    "destructive: tests that write to the router (LED brightness, Wi-Fi TX power, MST rules)",
+    "destructive: tests that change router settings and then revert them (or only touch dummy rules and a fake MAC address)",
+    "disruptive: tests that briefly interrupt the network for everyone, e.g. Wi-Fi off and on; skipped unless IB_E2E_DISRUPTIVE=1",
 ]
 
 [tool.coverage.run]

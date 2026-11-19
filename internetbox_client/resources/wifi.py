@@ -1,3 +1,4 @@
+import json
 from typing import Literal
 
 from internetbox_client.utils.APIClient import APIClient
@@ -10,6 +11,28 @@ class Wifi(APIClient):
         """Get Wi-Fi status"""
         data = {"parameters": {}}
         return self.post("/sysbus/NMC/Wifi:get", data, auth_required=False)
+
+    def set_enabled(self, enable: bool) -> str:
+        """Turn all Wi-Fi networks on or off, like the Wi-Fi switch in the web UI.
+
+        Turning Wi-Fi off disconnects every wireless device, including this computer if it uses Wi-Fi. Turn it back on
+        from a wired connection or with the button on the router. The guest network stays off when Wi-Fi comes back on
+        (the web UI's switch doesn't turn it on again either): use set_guest_enabled() for that.
+
+        Args:
+            enable (bool): True to turn Wi-Fi on, False to turn it off.
+
+        Returns:
+            str: response content
+
+        """
+        response = json.loads(self.status())
+        current = response.get("status") or response.get("data") or {}
+        # Internet Box 5 models: the web UI sends TempEnable instead of Status (untested).
+        parameters = {"Enable": enable, "Status": enable}
+        if "ConfigurationMode" in current:
+            parameters["ConfigurationMode"] = current["ConfigurationMode"]
+        return self.post("/sysbus/NMC/Wifi:set", {"parameters": parameters})
 
     def steering(self) -> str:
         """Get Wi-Fi steering status"""
@@ -25,6 +48,23 @@ class Wifi(APIClient):
         """Get Wi-Fi guest network settings"""
         data = {"parameters": {}}
         return self.post("/sysbus/NMC/Guest:get", data)
+
+    def set_guest_enabled(self, enable: bool, hours: int = 0) -> str:
+        """Turn the guest Wi-Fi on or off.
+
+        Args:
+            enable (bool): True to turn the guest network on, False to turn it off.
+            hours (int): when turning it on, turn it off again automatically after this many hours.
+                Default is 0: stay on until turned off.
+
+        Returns:
+            str: response content
+
+        """
+        result = self.post("/sysbus/NMC/Guest:set", {"parameters": {"Enable": enable}})
+        if enable:
+            self.post("/sysbus/NMC/WlanTimer:setActivationTimer", {"parameters": {"InterfaceName": "guest", "Timeout": hours}})
+        return result
 
     def radio(self, id: int) -> str:
         """Get Wi-Fi radio settings

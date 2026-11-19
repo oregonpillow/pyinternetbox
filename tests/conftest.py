@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from internetbox_client.utils.APIClient import APIClient, SessionManager
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip tests that interrupt the network for everyone (e.g. Wi-Fi off) unless IB_E2E_DISRUPTIVE=1 is set."""
+    if os.getenv("IB_E2E_DISRUPTIVE") == "1":
+        return
+    skip = pytest.mark.skip(reason="interrupts the network for others; set IB_E2E_DISRUPTIVE=1 to run")
+    for item in items:
+        if "disruptive" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture()

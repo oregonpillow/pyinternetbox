@@ -1,3 +1,6 @@
+import re
+
+
 def camel(s: str) -> str:
     """Convert a string to camel case.
         Several client payloads need case sensitive keys
@@ -39,3 +42,17 @@ def decode_nested_json(obj):
         except (json.JSONDecodeError, ValueError):
             pass
     return obj
+
+
+def normalize_mac(mac: str) -> str:
+    """Return a MAC address in the router's format: upper case, colon-separated.
+
+    Accepts the common notations: "aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF", "aabb.ccdd.eeff" and "aabbccddeeff".
+
+    Raises:
+        ValueError: if *mac* is not a MAC address.
+    """
+    digits = re.sub(r"[:.\-]", "", mac.strip())
+    if not re.fullmatch(r"[0-9A-Fa-f]{12}", digits):
+        raise ValueError(f"Not a MAC address: {mac!r}")
+    return ":".join(digits[i : i + 2] for i in range(0, 12, 2)).upper()

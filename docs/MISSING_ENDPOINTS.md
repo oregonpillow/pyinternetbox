@@ -1,5 +1,7 @@
 # Missing Endpoints — a comparison against LiveboxMonitor
 
+> For the complete, generated list of endpoints the web interface calls and functions the router exposes, and which ones pyinternetbox implements, see [API_MAP.md](API_MAP.md) (made by `scripts/discover_endpoints.py`).
+
 After initially implementing `internetbox_client/resources/` methods based on some sniffing of the internetbox 4 API calls in the webui, I found the LiveboxMonitor github repo
 which attempts to, in similar fashion to this project, provide a client for the French "Livebox" router. Livebox seems to also be based on an [Askey](https://www.askey.com.tw/) platform with very similar API built by [SoftatHome](https://www.softathome.com/2022/09/26/new-wi-fi-6e-box-launched-by-swisscom-is-powered-by-softathome/)
 which allowed me to discover a number of additional API endpoints that I had not yet implemented in `internetbox_client/resources/`. This document is a running list of 

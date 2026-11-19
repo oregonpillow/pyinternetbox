@@ -82,6 +82,16 @@ ibox --version
 
 The CLI outputs pretty JSON but can still be piped to popular tools like `jq`.
 
+Commands that change settings do what the matching switch or form in the web interface does. `ibox <group> --help` lists them, for example:
+
+```sh
+ibox firewall set-port-forwarding minecraft 192.168.1.20 25565 --protocol tcp
+ibox devices block AA:BB:CC:DD:EE:FF
+ibox mst set AA:BB:CC:DD:EE:FF --minutes-per-day 120 --allowed-time '{"Sat": 240, "Sun": 240}'
+```
+
+`ibox nmc reboot` and `ibox wifi set-enabled false` cut connections, so they ask for confirmation first. Add `--yes` to skip the question in scripts.
+
 ### Library usage
 
 ```python
@@ -213,6 +223,7 @@ So far the project is in early stages and I'm the only contributor, but I welcom
 ### How to contribute
 
 - Read the [MISSING_ENDPOINTS](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints that might work from the [LiveboxMonitor](https://github.com/p-dor/LiveboxMonitor)
+- Check the [API_MAP](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/API_MAP.md) for every endpoint the web interface calls and every function the router exposes, and which ones are implemented. Re-generate it for your model or firmware with `uv run scripts/discover_endpoints.py -H 192.168.1.1 -k`
 - Try creating more complex methods, see below for more details
 - Take a stab at implementing any bugs or features raised in the issues
 - Test the library with different Swisscom/Wingo Internet Box models and report any issues you find - testers are much appreciaited!!
@@ -225,7 +236,7 @@ So far the project is in early stages and I'm the only contributor, but I welcom
 
 When logged into the web interface, within developer tools you can see the REST-API logic within the js scripts.
 
-Pretty much all the REST-API logic is contained within these. These scripts could be parsed to find missing endpoints and provide a template for how to interact and combine calls for more powerful dynamic methods.
+Pretty much all the REST-API logic is contained within these. These scripts could be parsed to find missing endpoints and provide a template for how to interact and combine calls for more powerful dynamic methods. `scripts/discover_endpoints.py` does the first part: it lists the endpoints and parameter names the scripts use in [API_MAP](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/API_MAP.md).
 
 The scripts likely differ based on the Web portal version.
 The `Web portal version` can be found in the web gui: `Diagnostics > Internet-Box`.
@@ -336,7 +347,7 @@ PyPI never accepts the same version twice, so if the package was already uploade
 The tests are designed to be safe but they do make real HTTP requests to your router and some of the tests are destructive (they change a setting on the router and then attempt to change it back). If you want to be extra cautious you can run only the read-only tests which shouldn't make any changes to the router.
 
 ```sh
-# 🔬 Read-only — should be safe for any environment (default when running e2e)
+# 🔬 Read-only — should be safe for any environment
 uv run pytest tests/test_e2e.py -m "not destructive" -v
 
 # 💥 All tests including destructive (writes to the router, then reverts)
@@ -344,9 +355,14 @@ uv run pytest tests/test_e2e.py -v
 
 # 💥 Only destructive tests
 uv run pytest tests/test_e2e.py -m destructive -v
+
+# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on)
+IB_E2E_DISRUPTIVE=1 uv run pytest tests/test_e2e.py -m disruptive -v
 ```
 
-Destructive tests write to the router but always revert the original value immediately after (LED brightness, Wi-Fi TX power, MST rules).
+Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels), or create something temporary and delete it again: a disabled port forwarding rule named `pyinternetbox-e2e`, and a device entry, IP address reservation, access schedule and time limit for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host is set or the guest Wi-Fi is on.
+
+Tests that cut the network for everyone are skipped unless `IB_E2E_DISRUPTIVE=1` is set. The Wi-Fi off/on test also skips unless the machine running it is connected to the router by cable, since it couldn't turn Wi-Fi back on otherwise. Turning Wi-Fi off and on leaves the guest network off, so the test turns it back on if it was on.
 
 ## Related Projects
 

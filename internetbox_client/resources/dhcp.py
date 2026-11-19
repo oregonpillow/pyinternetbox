@@ -1,4 +1,5 @@
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.helpers import normalize_mac
 
 
 class DHCP(APIClient):
@@ -8,6 +9,35 @@ class DHCP(APIClient):
         """Get DHCPv4 static leases"""
         data = {"parameters": {}}
         return self.post("/sysbus/DHCPv4/Server/Pool/default:getStaticLeases", data)
+
+    def add_static_lease(self, mac: str, ip: str) -> str:
+        """Reserve an IP address for a device (static DHCP lease).
+
+        The device gets the address the next time it renews its lease, e.g. when it reconnects.
+
+        Args:
+            mac (str): device MAC address, e.g. "AA:BB:CC:DD:EE:FF".
+            ip (str): IPv4 address in the LAN subnet, e.g. "192.168.1.20".
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"MACAddress": normalize_mac(mac), "IPAddress": ip}}
+        return self.post("/sysbus/DHCPv4/Server/Pool/default:addStaticLease", data)
+
+    def delete_static_lease(self, mac: str) -> str:
+        """Remove a device's IP address reservation (static DHCP lease).
+
+        Args:
+            mac (str): device MAC address.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"MACAddress": normalize_mac(mac)}}
+        return self.post("/sysbus/DHCPv4/Server/Pool/default:deleteStaticLease", data)
 
     def server_pool(self) -> str:
         """Get DHCPv4 server pool"""
