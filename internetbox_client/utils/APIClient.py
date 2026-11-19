@@ -12,6 +12,10 @@ import urllib3  # deptry: ignore[DEP003]
 
 logger = logging.getLogger(__name__)
 
+# (connect, read) seconds. The short connect timeout makes an unreachable host fail fast
+# instead of hanging; the read timeout leaves room for slow router endpoints.
+DEFAULT_TIMEOUT: tuple[float, float] = (5, 30)
+
 _NO_AUTH_HEADERS = {
     "Authorization": "X-Sah null",
     "X-Context": "null",
@@ -72,7 +76,8 @@ def _resolve_ssl_verify(base_url: str, ssl_verify: bool | None) -> bool:
         return env.lower() != "false"
     if _is_ip_address(base_url):
         logger.warning(
-            "Connecting by IP address: SSL certificate verification disabled (the certificate is only valid for internetbox.swisscom.ch)."
+            "Connecting by IP address: SSL certificate verification disabled (the certificate is only valid for "
+            "internetbox.swisscom.ch). Pass --insecure / -k (or set IB_SSL_VERIFY=false) to hide this warning."
         )
         return False
     return True
@@ -97,8 +102,10 @@ class SessionManager:
         username: str = os.getenv("IB_USERNAME", "admin"),
         application_name: str = "webui",
         ssl_verify: bool | None = None,
+        timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
     ) -> None:
         self.base_url = normalize_hostname(hostname)
+        self.timeout = timeout
         ssl_verify = _resolve_ssl_verify(self.base_url, ssl_verify)
         self.application_name = application_name
         self._username = username
@@ -123,7 +130,7 @@ class SessionManager:
             "parameters": {"applicationName": self.application_name, "username": self._username, "password": self._password},
         }
 
-        login_response = self.session.post(url=self.auth_url, json=login_data)
+        login_response = self.session.post(url=self.auth_url, json=login_data, timeout=self.timeout)
         login_response.raise_for_status()
 
         self.context_id = login_response.json()["data"]["contextID"]
@@ -147,7 +154,7 @@ class SessionManager:
         }
 
         try:
-            self.session.post(url=self.auth_url, json=logout_data)
+            self.session.post(url=self.auth_url, json=logout_data, timeout=self.timeout)
         finally:
             self.context_id = None
             self.session.close()
@@ -165,7 +172,7 @@ class SessionManager:
             self._ensure_authenticated()
         headers = _NO_AUTH_HEADERS if not auth_required else {}
         url = urljoin(self.base_url, endpoint) if endpoint else self.base_url
-        response = self.session.get(url=url, headers=headers)
+        response = self.session.get(url=url, headers=headers, timeout=self.timeout)
         response.raise_for_status()
         return response.text
 
@@ -175,7 +182,7 @@ class SessionManager:
             self._ensure_authenticated()
         headers = _NO_AUTH_HEADERS if not auth_required else {}
         url = urljoin(self.base_url, endpoint) if endpoint else self.base_url
-        response = self.session.post(url=url, json=data, headers=headers)
+        response = self.session.post(url=url, json=data, headers=headers, timeout=self.timeout)
         response.raise_for_status()
         return response.text
 

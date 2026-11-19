@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import json
 import threading
 import typing
-from typing import TYPE_CHECKING, Annotated, Optional
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Annotated, NoReturn, Optional
 
+import requests
 import typer
 
 from internetbox_client import PROJECT_NAME, PROJECT_URL, __version__
@@ -65,6 +68,33 @@ def _make_client() -> InternetBoxClient:
     from internetbox_client import InternetBoxClient
 
     return InternetBoxClient(hostname=_hostname, password=_password, username=_username, ssl_verify=False if _insecure else None)
+
+
+_DEFAULT_HOST_HINT = (
+    "internetbox.swisscom.ch only reaches your router if your DNS resolves it to the router's LAN address. "
+    "Custom DNS servers (Pi-hole, AdGuard, 1.1.1.1, ...) return Swisscom's public address instead. "
+    "Check with `getent hosts internetbox.swisscom.ch` (Linux) or pass the router IP, e.g. --host 192.168.1.1."
+)
+
+
+@contextlib.contextmanager
+def _friendly_errors() -> Iterator[None]:
+    """Turn network failures into a short explanation instead of a traceback."""
+    try:
+        yield
+    except requests.exceptions.SSLError as exc:
+        _fail(f"SSL error talking to {_hostname}: {exc}\nUse --insecure / -k to skip certificate verification.")
+    except requests.exceptions.ReadTimeout:
+        _fail(f"{_hostname} accepted the connection but did not answer in time.", hint=True)
+    except requests.exceptions.ConnectionError as exc:
+        _fail(f"Could not connect to {_hostname}: {exc}", hint=True)
+
+
+def _fail(message: str, hint: bool = False) -> NoReturn:
+    if hint and "internetbox.swisscom.ch" in _hostname:
+        message += f"\n\n{_DEFAULT_HOST_HINT}"
+    typer.echo(message, err=True)
+    raise typer.Exit(1)
 
 
 # ── Dynamic CLI generation ────────────────────────────────────────────
@@ -149,7 +179,7 @@ def _build_command_func(attr_name: str, method_name: str, params: list[tuple[str
 
     # Wire up the actual invocation logic (closure, not exec'd)
     def _invoke(a: str, m: str, local_values: dict) -> None:
-        with _make_client() as client:
+        with _friendly_errors(), _make_client() as client:
             resource = getattr(client, a)
             call_kwargs = {}
             for pname, param in params:
@@ -174,7 +204,7 @@ def _register_command(
         def _make_no_param_cmd(a: str = attr_name, m: str = method_name):
             @group.command(name=cli_name, help=help_text)
             def cmd():
-                with _make_client() as client:
+                with _friendly_errors(), _make_client() as client:
                     _output(getattr(getattr(client, a), m)())
 
         _make_no_param_cmd()

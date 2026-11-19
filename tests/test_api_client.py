@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from internetbox_client.utils.APIClient import _NO_AUTH_HEADERS, APIClient, SessionManager, normalize_hostname
+from internetbox_client.utils.APIClient import DEFAULT_TIMEOUT, _NO_AUTH_HEADERS, APIClient, SessionManager, normalize_hostname
 
 # ── Hostname normalisation / SSL verification ─────────────────────────
 
@@ -193,6 +193,22 @@ class TestSessionManagerRequests:
         assert result == '{"status":"ok"}'
         call_kwargs = mock_session.post.call_args
         assert call_kwargs.kwargs["json"] == {"key": "val"}
+
+    def test_requests_use_timeout(self) -> None:
+        sm, mock_session = self._build_sm()
+        sm.get("/foo")
+        sm.post("/bar")
+        assert mock_session.get.call_args.kwargs["timeout"] == DEFAULT_TIMEOUT
+        assert mock_session.post.call_args.kwargs["timeout"] == DEFAULT_TIMEOUT
+
+    @patch("internetbox_client.utils.APIClient.requests.Session")
+    def test_login_uses_custom_timeout(self, mock_session_cls: MagicMock) -> None:
+        mock_session = MagicMock()
+        mock_session_cls.return_value = mock_session
+        mock_session.post.return_value.json.return_value = {"data": {"contextID": "ctx-1"}}
+        sm = SessionManager(password="p", timeout=2)
+        sm._ensure_authenticated()
+        assert mock_session.post.call_args.kwargs["timeout"] == 2
 
 
 # ── APIClient ─────────────────────────────────────────────────────────
