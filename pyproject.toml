@@ -1,24 +1,60 @@
 [project]
 name = "pyinternetbox"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Internet Box API client and exporter for Swisscom and Wingo routers."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Timothy Pillow", email = "oregonpillow@gmail.com" }]
 requires-python = ">=3.12"
+keywords = ["swisscom", "wingo", "internet-box", "router", "prometheus", "exporter", "sysbus"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Networking",
+]
 dependencies = [
     "prometheus-client>=0.14.0",
     "requests>=2.33.0",
     "typer>=0.24.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/oregonpillow/pyinternetbox"
+Repository = "https://github.com/oregonpillow/pyinternetbox"
+Issues = "https://github.com/oregonpillow/pyinternetbox/issues"
+Releases = "https://github.com/oregonpillow/pyinternetbox/releases"
+"Docker image" = "https://hub.docker.com/r/oregonpillow/pyinternetbox"
+
 [project.scripts]
 ibox = "internetbox_client.cli:app"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# The version comes from the latest git tag (e.g. v0.2.0 -> 0.2.0). Untagged
+# commits get a dev version such as 0.2.1.dev3+g1a2b3c4. Builds without git
+# history (e.g. a plain `docker build`) fall back to 0.0.0 unless
+# SETUPTOOLS_SCM_PRETEND_VERSION is set.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
 
 [tool.hatch.build.targets.wheel]
 packages = ["internetbox_client"]
+
+[tool.hatch.build.targets.sdist]
+include = ["internetbox_client", "tests", "README.md", "LICENSE"]
 
 [tool.ruff]
 line-length = 140

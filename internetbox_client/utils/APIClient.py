@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import ipaddress
+import logging
 import os
 from types import TracebackType
 from typing import Any, Mapping
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 import urllib3  # deptry: ignore[DEP003]
+
+logger = logging.getLogger(__name__)
 
 _NO_AUTH_HEADERS = {
     "Authorization": "X-Sah null",
@@ -14,6 +18,64 @@ _NO_AUTH_HEADERS = {
     "Content-Type": "application/x-sah-ws-4-call+json",
     "Accept": "application/json, text/javascript, */*; q=0.01",
 }
+
+
+def normalize_hostname(hostname: str) -> str:
+    """Return ``https://host[:port]`` for any user-supplied hostname.
+
+    Adds a missing scheme, upgrades ``http://`` to ``https://`` (the gateway
+    does not serve the API over plain HTTP) and drops any path, query or
+    trailing slash.
+    """
+    raw = hostname.strip()
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parts = urlsplit(raw)
+    scheme = parts.scheme.lower()
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    port = parts.port
+
+    if scheme == "http":
+        logger.warning("The Internet Box API is only served over HTTPS; using https:// instead of http://.")
+        scheme = "https"
+        if port == 80:
+            port = None
+    elif scheme != "https":
+        raise ValueError(f"Unsupported URL scheme {parts.scheme!r} in hostname {hostname!r}; use https://.")
+
+    if not host:
+        raise ValueError(f"Invalid hostname {hostname!r}.")
+    return f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
+
+
+def _is_ip_address(base_url: str) -> bool:
+    try:
+        ipaddress.ip_address(urlsplit(base_url).hostname or "")
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_ssl_verify(base_url: str, ssl_verify: bool | None) -> bool:
+    """Decide whether to verify TLS certificates.
+
+    Priority: explicit argument, then ``IB_SSL_VERIFY``, then auto-detect.
+    The gateway's certificate is issued for ``internetbox.swisscom.ch``, so
+    verification can never succeed when connecting by IP address.
+    """
+    if ssl_verify is not None:
+        return ssl_verify
+    env = os.getenv("IB_SSL_VERIFY")
+    if env is not None:
+        return env.lower() != "false"
+    if _is_ip_address(base_url):
+        logger.warning(
+            "Connecting by IP address: SSL certificate verification disabled (the certificate is only valid for internetbox.swisscom.ch)."
+        )
+        return False
+    return True
 
 
 class SessionManager:
@@ -34,9 +96,10 @@ class SessionManager:
         password: str = os.getenv("IB_PASSWORD", ""),
         username: str = os.getenv("IB_USERNAME", "admin"),
         application_name: str = "webui",
-        ssl_verify: bool = os.getenv("IB_SSL_VERIFY", "true").lower() != "false",
+        ssl_verify: bool | None = None,
     ) -> None:
-        self.base_url = hostname
+        self.base_url = normalize_hostname(hostname)
+        ssl_verify = _resolve_ssl_verify(self.base_url, ssl_verify)
         self.application_name = application_name
         self._username = username
         self._password = password

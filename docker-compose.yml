@@ -1,12 +1,11 @@
 services:
   pyinternetbox-exporter:
     container_name: pyinternetbox-exporter
-    build: .
+    image: oregonpillow/pyinternetbox:latest
     ports:
       - "9101:9101"
     environment:
       IB_HOSTNAME: https://internetbox.swisscom.ch
-      IB_SSL_VERIFY: "true"
       IB_USERNAME: admin
       IB_PASSWORD: "${IB_PASSWORD}"
     restart: unless-stopped

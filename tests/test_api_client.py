@@ -7,7 +7,57 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from internetbox_client.utils.APIClient import _NO_AUTH_HEADERS, APIClient, SessionManager
+from internetbox_client.utils.APIClient import _NO_AUTH_HEADERS, APIClient, SessionManager, normalize_hostname
+
+# ── Hostname normalisation / SSL verification ─────────────────────────
+
+
+class TestNormalizeHostname:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("192.168.0.254", "https://192.168.0.254"),
+            ("192.168.0.254:8443", "https://192.168.0.254:8443"),
+            ("http://192.168.0.254", "https://192.168.0.254"),
+            ("http://192.168.0.254:80", "https://192.168.0.254"),
+            ("http://192.168.0.254:8080", "https://192.168.0.254:8080"),
+            ("HTTPS://Box.Local/", "https://box.local"),
+            ("https://box.local/some/path?x=1", "https://box.local"),
+            ("  internetbox.swisscom.ch  ", "https://internetbox.swisscom.ch"),
+            ("[fe80::1]", "https://[fe80::1]"),
+        ],
+    )
+    def test_normalize(self, raw: str, expected: str) -> None:
+        assert normalize_hostname(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["ftp://box.local", "https://", ""])
+    def test_invalid(self, raw: str) -> None:
+        with pytest.raises(ValueError):
+            normalize_hostname(raw)
+
+
+class TestSslVerify:
+    @pytest.fixture(autouse=True)
+    def _no_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("IB_SSL_VERIFY", raising=False)
+
+    def test_hostname_verifies(self) -> None:
+        assert SessionManager(hostname="https://internetbox.swisscom.ch").session.verify is True
+
+    @pytest.mark.parametrize("host", ["192.168.0.254", "http://192.168.0.254:80", "[fe80::1]"])
+    def test_ip_auto_insecure(self, host: str) -> None:
+        assert SessionManager(hostname=host).session.verify is False
+
+    def test_explicit_overrides_ip(self) -> None:
+        assert SessionManager(hostname="192.168.0.254", ssl_verify=True).session.verify is True
+
+    def test_explicit_insecure(self) -> None:
+        assert SessionManager(hostname="internetbox.swisscom.ch", ssl_verify=False).session.verify is False
+
+    def test_env_overrides_ip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("IB_SSL_VERIFY", "true")
+        assert SessionManager(hostname="192.168.0.254").session.verify is True
+
 
 # ── SessionManager ────────────────────────────────────────────────────
 

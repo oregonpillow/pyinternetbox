@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import TracebackType
+from typing import Any
 
 from internetbox_client.resources import *  # noqa: F403
 from internetbox_client.utils.APIClient import SessionManager
@@ -22,14 +23,18 @@ class InternetBoxClient:
     and ``IB_USERNAME`` environment variables when not provided explicitly.
     """
 
-    def __init__(self, hostname: str | None = None, password: str | None = None, username: str | None = None) -> None:
-        kwargs = {}
+    def __init__(
+        self, hostname: str | None = None, password: str | None = None, username: str | None = None, ssl_verify: bool | None = None
+    ) -> None:
+        kwargs: dict[str, Any] = {}
         if hostname is not None:
             kwargs["hostname"] = hostname
         if password is not None:
             kwargs["password"] = password
         if username is not None:
             kwargs["username"] = username
+        if ssl_verify is not None:
+            kwargs["ssl_verify"] = ssl_verify
         self._sm = SessionManager(**kwargs)
 
         self.devices = Devices(session_manager=self._sm)

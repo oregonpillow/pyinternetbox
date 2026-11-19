@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/logo.svg" width="400px" alt="Grafana Dashboard" />
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/docs/logo.svg" width="400px" alt="Grafana Dashboard" />
   <h1 style="font-size: 28px; margin: 10px 0;">pyinternetbox</h1>
   <p>Python library and CLI tool (with built in exporter) for Swisscom / Wingo Internet Box routers.</p>
 </div>
@@ -26,6 +26,7 @@
   - [Model Information](#model-information)
   - [Development Requirements](#development-requirements)
   - [🪝 Pre-commit Hooks](#-pre-commit-hooks)
+  - [🏷️ Releasing](#-releasing)
 - [🧪 Tests](#-tests)
   - [End-to-End (E2E) Tests](#end-to-end-e2e-tests)
 - [Related Projects](#related-projects)
@@ -37,15 +38,26 @@
 
 ### Installation
 
-(no official release yet, install from source)
+**from PyPI**:
 
-**with uv** (recommended):
+```sh
+pip install pyinternetbox      # library + `ibox` CLI
+uv tool install pyinternetbox  # or: just the `ibox` CLI, in its own environment
+```
+
+**with Docker** (runs the exporter):
+
+```sh
+docker run -d -p 9101:9101 -e IB_PASSWORD=secret oregonpillow/pyinternetbox:latest
+```
+
+**from source** (for development) **with uv**:
 
 ```sh
 uv sync
 ```
 
-**with pip**:
+**from source with pip**:
 
 ```sh
 python3 -m venv .venv
@@ -55,16 +67,17 @@ pip install -e .
 
 ### CLI usage
 
-**with uv**
+**with uv** (from source)
 
 ```sh
 uv run ibox --help
 ```
 
-**with pip**:
+**with pip / uv tool**:
 
 ```sh
 ibox --help
+ibox --version
 ```
 
 The CLI outputs pretty JSON but can still be piped to popular tools like `jq`.
@@ -94,11 +107,19 @@ ibox export
 
 **with Docker Compose**:
 
-Set set environent variables in `docker-compose.yml`, then:
+Set environment variables in `docker-compose.yml`, then:
 
 ```sh
 docker compose up -d
 ```
+
+Images are published to Docker Hub as [`oregonpillow/pyinternetbox`](https://hub.docker.com/r/oregonpillow/pyinternetbox):
+
+| **Tag**        | **Contents**                                     |
+| -------------- | ------------------------------------------------ |
+| `latest`       | Most recent release                              |
+| `X.Y.Z`, `X.Y` | A specific release / the latest patch of a minor |
+| `edge`         | Latest commit on `master` (may be unstable)      |
 
 Metrics will be available at `http://localhost:9101/metrics`.
 
@@ -141,20 +162,20 @@ Notes:
 Dashboards can be found in the Grafana folder.
 
 <p align="center">
-  <img src="grafana/internetbox4.jpg" alt="Grafana Dashboard" width="49%"/>
-  <img src="grafana/internetbox4_2.jpg" alt="Grafana Traffic Dashboard" width="49%"/>
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4.jpg" alt="Grafana Dashboard" width="49%"/>
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4_2.jpg" alt="Grafana Traffic Dashboard" width="49%"/>
 </p>
 
 ## Environment Variables
 
-| **Variable**           | **Description**                                                                                                                                                                                         | **Required** |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| `IB_HOSTNAME`          | Hostname or IP address of the Internet Box router. Defaults to `https://internetbox.swisscom.ch`.                                                                                                       | No           |
-| `IB_USERNAME`          | Username for router authentication. Defaults to `admin`.                                                                                                                                                | No           |
-| `IB_PASSWORD`          | Password for router authentication. Defaults to an empty string. Without a password many of the client methods will not work. See below for complete list of methods that don't require authentication. | No           |
-| `IB_EXPORTER_PORT`     | TCP port the Prometheus `/metrics` endpoint listens on. Defaults to `9101`.                                                                                                                             | No           |
-| `IB_EXPORTER_INTERVAL` | Seconds between data collection cycles when running the exporter. Defaults to `30`.                                                                                                                     | No           |
-| `IB_SSL_VERIFY`        | Set to `false` to disable SSL certificate verification. Useful when connecting via local IP (e.g. `https://192.168.1.1`) instead of `https://internetbox.swisscom.ch`. Defaults to `true`.              | No           |
+| **Variable**           | **Description**                                                                                                                                                                                                                                               | **Required** |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `IB_HOSTNAME`          | Hostname or IP address of the Internet Box router, e.g. `192.168.1.1` or `https://192.168.1.1`. `http://` is upgraded to `https://`. Defaults to `https://internetbox.swisscom.ch`.                                                                           | No           |
+| `IB_USERNAME`          | Username for router authentication. Defaults to `admin`.                                                                                                                                                                                                      | No           |
+| `IB_PASSWORD`          | Password for router authentication. Defaults to an empty string. Without a password many of the client methods will not work. See below for complete list of methods that don't require authentication.                                                       | No           |
+| `IB_EXPORTER_PORT`     | TCP port the Prometheus `/metrics` endpoint listens on. Defaults to `9101`.                                                                                                                                                                                   | No           |
+| `IB_EXPORTER_INTERVAL` | Seconds between data collection cycles when running the exporter. Defaults to `30`.                                                                                                                                                                           | No           |
+| `IB_SSL_VERIFY`        | `true` / `false` to force SSL certificate verification on or off (CLI: `--insecure` / `-k`). When unset, verification is on for hostnames and automatically off for IP addresses, since the router's certificate is only valid for `internetbox.swisscom.ch`. | No           |
 
 ## Usage without authentication
 
@@ -191,7 +212,7 @@ So far the project is in early stages and I'm the only contributor, but I welcom
 
 ### How to contribute
 
-- Read the [MISSING_ENDPOINTS](./docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints that might work from the [LiveboxMonitor](https://github.com/p-dor/LiveboxMonitor)
+- Read the [MISSING_ENDPOINTS](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints that might work from the [LiveboxMonitor](https://github.com/p-dor/LiveboxMonitor)
 - Try creating more complex methods, see below for more details
 - Take a stab at implementing any bugs or features raised in the issues
 - Test the library with different Swisscom/Wingo Internet Box models and report any issues you find - testers are much appreciaited!!
@@ -258,6 +279,26 @@ This project uses pre-commit hooks. To set it up:
 - `uv tool install pre-commit --with pre-commit-uv`
 - `uvx pre-commit install`
 - test by running all hooks: `uvx pre-commit run -a`
+
+### 🏷️ Releasing
+
+The version is defined **only by the git tag** — there is no version number to edit in any file.
+[hatch-vcs](https://github.com/ofek/hatch-vcs) derives it at build time, and it flows into the PyPI package, `ibox --version`, the Docker image tags and the exporter's startup line.
+
+```sh
+git checkout master && git pull
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Pushing the tag runs [`release.yml`](https://github.com/oregonpillow/pyinternetbox/blob/master/.github/workflows/release.yml), which runs the tests and then:
+
+- publishes `pyinternetbox==0.2.0` to PyPI
+- pushes `oregonpillow/pyinternetbox:0.2.0`, `:0.2` and `:latest` to Docker Hub
+- creates a GitHub Release with auto-generated notes and the built packages
+
+Every push to `master` also publishes `oregonpillow/pyinternetbox:edge`. Untagged builds get a development version such as `0.2.1.dev3+g1a2b3c4`.
+Use plain `vMAJOR.MINOR.PATCH` tags.
 
 ## 🧪 Tests
 

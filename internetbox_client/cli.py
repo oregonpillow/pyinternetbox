@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Optional
 
 import typer
 
+from internetbox_client import PROJECT_NAME, PROJECT_URL, __version__
 from internetbox_client.utils.APIClient import APIClient
 
 if TYPE_CHECKING:
@@ -21,6 +22,13 @@ app = typer.Typer(name="internetbox", help="CLI for the Swisscom Internet Box AP
 _hostname: str = "https://internetbox.swisscom.ch"
 _password: str = ""
 _username: str = "admin"
+_insecure: bool = False
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"{PROJECT_NAME} {__version__}")
+        raise typer.Exit()
 
 
 @app.callback()
@@ -30,11 +38,18 @@ def main(
     ] = "https://internetbox.swisscom.ch",
     password: Annotated[str, typer.Option("--password", "-p", envvar="IB_PASSWORD", help="Router admin password.")] = "",
     username: Annotated[str, typer.Option("--username", "-u", envvar="IB_USERNAME", help="Router admin username.")] = "admin",
+    insecure: Annotated[
+        bool, typer.Option("--insecure", "-k", help="Skip SSL certificate verification (done automatically when --host is an IP address).")
+    ] = False,
+    version: Annotated[
+        bool, typer.Option("--version", "-V", callback=_version_callback, is_eager=True, help="Show the version and exit.")
+    ] = False,
 ):
-    global _hostname, _password, _username
+    global _hostname, _password, _username, _insecure
     _hostname = hostname
     _password = password
     _username = username
+    _insecure = insecure
 
 
 def _output(raw: str) -> None:
@@ -49,7 +64,7 @@ def _output(raw: str) -> None:
 def _make_client() -> InternetBoxClient:
     from internetbox_client import InternetBoxClient
 
-    return InternetBoxClient(hostname=_hostname, password=_password, username=_username)
+    return InternetBoxClient(hostname=_hostname, password=_password, username=_username, ssl_verify=False if _insecure else None)
 
 
 # ── Dynamic CLI generation ────────────────────────────────────────────
@@ -245,6 +260,8 @@ def export(
 
     from internetbox_client.exporter import InternetBoxCollector
     from internetbox_client.metrics import register_metrics
+
+    typer.echo(f"{PROJECT_NAME} {__version__}  |  {PROJECT_URL}")
 
     client = _make_client()
     # Use a distinct application name so the exporter session does not
