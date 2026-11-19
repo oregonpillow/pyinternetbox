@@ -20,11 +20,13 @@ if a method from Livebox doesn't work on internetbox mark it with "⚠️" and a
 
 ## `LmBackupRestoreApi` → `nmc.py` — Write operations missing
 
-- [ ] `set_auto_backup_enable(enable)` → `NMC.NetworkConfig:enableNetworkBR`
-- [ ] `do_backup()` → `NMC.NetworkConfig:launchNetworkBackup`
-- [ ] `do_restore()` → `NMC.NetworkConfig:launchNetworkRestore`
+- [ ] ⚠️ **won't work on internetbox4** `set_auto_backup_enable(enable)` → `NMC.NetworkConfig:enableNetworkBR`
+- [x] `do_backup()` → `NMC.NetworkConfig:launchNetworkBackup`
+- [ ] ⚠️ **won't work on internetbox4** `do_restore()` → `NMC.NetworkConfig:launchNetworkRestore`
 
-> Read-only `get_status()` → `NMC.NetworkConfig:get` is covered by `nmc.py:network_config()`.
+> Read-only `get_status()` → `NMC.NetworkConfig:get` is covered by `nmc.py:network_config()`. `do_backup()` is `nmc.py:backup_to_swisscom()`.
+>
+> ⚠️ On the internetbox4, `NMC.NetworkConfig` only has `get` and `launchNetworkBackup`: there's no `enableNetworkBR` or `launchNetworkRestore` (see [API_MAP.md](API_MAP.md)).
 
 ---
 

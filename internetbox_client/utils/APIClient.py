@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 # (connect, read) seconds. The short connect timeout makes an unreachable host fail fast
 # instead of hanging; the read timeout leaves room for slow router endpoints.
 DEFAULT_TIMEOUT: tuple[float, float] = (5, 30)
+# Configuration backups and restores take longer: the web UI waits up to 200 s for a backup.
+TRANSFER_TIMEOUT: tuple[float, float] = (5, 200)
 
 _NO_AUTH_HEADERS = {
     "Authorization": "X-Sah null",
@@ -186,6 +188,28 @@ class SessionManager:
         response.raise_for_status()
         return response.text
 
+    def download(self, endpoint: str) -> str:
+        """Download a file the way the web UI does: a GET request with the session's context ID as a query parameter."""
+        self._ensure_authenticated()
+        url = urljoin(self.base_url, endpoint)
+        response = self.session.get(url=url, params={"context": self.context_id}, timeout=TRANSFER_TIMEOUT)
+        response.raise_for_status()
+        return response.text
+
+    def upload(self, endpoint: str, field: str, filename: str, content: bytes) -> str:
+        """Upload a file the way the web UI's forms do: multipart/form-data, with the session's context ID first."""
+        self._ensure_authenticated()
+        url = urljoin(self.base_url, endpoint)
+        response = self.session.post(
+            url=url,
+            data={"context": self.context_id},
+            files={field: (filename, content, "application/octet-stream")},
+            headers={"Content-Type": None},  # drops the session's JSON content type, so requests sets the multipart one
+            timeout=TRANSFER_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.text
+
 
 class APIClient:
     """Base class for Internet Box API resource groups.
@@ -228,3 +252,9 @@ class APIClient:
 
     def post(self, endpoint: str | None = None, data: Mapping[str, Any] | None = None, auth_required: bool = True) -> str:
         return self._sm.post(endpoint, data, auth_required)
+
+    def download(self, endpoint: str) -> str:
+        return self._sm.download(endpoint)
+
+    def upload(self, endpoint: str, field: str, filename: str, content: bytes) -> str:
+        return self._sm.upload(endpoint, field, filename, content)

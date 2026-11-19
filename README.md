@@ -90,7 +90,16 @@ ibox devices block AA:BB:CC:DD:EE:FF
 ibox mst set AA:BB:CC:DD:EE:FF --minutes-per-day 120 --allowed-time '{"Sat": 240, "Sun": 240}'
 ```
 
-`ibox nmc reboot` and `ibox wifi set-enabled false` cut connections, so they ask for confirmation first. Add `--yes` to skip the question in scripts.
+To save all settings to a file and load them back later, like the web interface's "Save Current Configuration" and "Restore Configuration" buttons (the phone book isn't included, and a restore leaves it as it is):
+
+```sh
+ibox nmc backup > internetbox.cfg
+ibox nmc restore internetbox.cfg
+```
+
+`ibox nmc backup-to-swisscom` uploads the settings to Swisscom, as the web interface does when you save a change. It only works if backup to Swisscom is turned on for your router; the web interface has no setting for it. The upload runs in the background for about a minute, and `ibox nmc network-config` shows its status.
+
+`ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards) and `ibox wifi set-enabled false` cut connections, so they ask for confirmation first. Add `--yes` to skip the question in scripts.
 
 ### Library usage
 

@@ -7,7 +7,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from internetbox_client.utils.APIClient import DEFAULT_TIMEOUT, _NO_AUTH_HEADERS, APIClient, SessionManager, normalize_hostname
+from internetbox_client.utils.APIClient import (
+    DEFAULT_TIMEOUT,
+    TRANSFER_TIMEOUT,
+    _NO_AUTH_HEADERS,
+    APIClient,
+    SessionManager,
+    normalize_hostname,
+)
 
 # ── Hostname normalisation / SSL verification ─────────────────────────
 
@@ -211,6 +218,52 @@ class TestSessionManagerRequests:
         assert mock_session.post.call_args.kwargs["timeout"] == 2
 
 
+class TestSessionManagerFileTransfer:
+    """download() and upload() send the requests the web UI sends, checked on the request requests actually builds."""
+
+    @pytest.fixture()
+    def sm(self) -> SessionManager:
+        sm = SessionManager(hostname="192.0.2.1", ssl_verify=False)
+        sm.context_id = "ctx-1"  # logged in, with the headers a login sets
+        sm.session.headers.update({"Content-Type": "application/x-sah-ws-4-call+json", "Authorization": "X-Sah ctx-1"})
+        response = requests.Response()
+        response.status_code, response._content, response.encoding = 200, b"QUJD\n", "ascii"
+        sm.session.send = MagicMock(return_value=response)
+        return sm
+
+    def test_download_passes_the_context_in_the_url(self, sm: SessionManager) -> None:
+        assert sm.download("/backup") == "QUJD\n"
+        request = sm.session.send.call_args.args[0]
+        assert (request.method, request.url) == ("GET", "https://192.0.2.1/backup?context=ctx-1")
+        assert sm.session.send.call_args.kwargs["timeout"] == TRANSFER_TIMEOUT
+
+    def test_upload_is_a_form_with_the_context_first(self, sm: SessionManager) -> None:
+        sm.upload("/restore", "restore", "internetbox.cfg", b"QUJD\n")
+        request = sm.session.send.call_args.args[0]
+        assert (request.method, request.url) == ("POST", "https://192.0.2.1/restore")
+        assert request.headers["Content-Type"].startswith("multipart/form-data; boundary=")
+        context = request.body.index(b'Content-Disposition: form-data; name="context"\r\n\r\nctx-1\r\n')
+        file = request.body.index(
+            b'Content-Disposition: form-data; name="restore"; filename="internetbox.cfg"\r\n'
+            b"Content-Type: application/octet-stream\r\n\r\nQUJD\n\r\n"
+        )
+        assert context < file
+        assert sm.session.send.call_args.kwargs["timeout"] == TRANSFER_TIMEOUT
+
+    def test_logs_in_first(self, sm: SessionManager) -> None:
+        sm.context_id = None
+        with patch.object(sm, "_ensure_authenticated") as login:
+            sm.download("/backup")
+            sm.upload("/restore", "restore", "internetbox.cfg", b"QUJD\n")
+        assert login.call_count == 2
+
+    @pytest.mark.parametrize("transfer", [lambda sm: sm.download("/backup"), lambda sm: sm.upload("/restore", "restore", "a.cfg", b"")])
+    def test_http_errors_raise(self, sm: SessionManager, transfer) -> None:
+        sm.session.send.return_value.status_code = 500
+        with pytest.raises(requests.HTTPError):
+            transfer(sm)
+
+
 # ── APIClient ─────────────────────────────────────────────────────────
 
 
@@ -226,6 +279,12 @@ class TestAPIClient:
 
         client.post("/ws", data={"a": 1})
         mock_session_manager.post.assert_called_once_with("/ws", {"a": 1}, True)
+
+        client.download("/backup")
+        mock_session_manager.download.assert_called_once_with("/backup")
+
+        client.upload("/restore", "restore", "internetbox.cfg", b"QUJD")
+        mock_session_manager.upload.assert_called_once_with("/restore", "restore", "internetbox.cfg", b"QUJD")
 
     def test_base_url_property(self, mock_session_manager: MagicMock) -> None:
         with patch.object(APIClient, "__init__", lambda self, **_: None):

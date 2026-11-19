@@ -697,6 +697,14 @@ class TestMitigation:
 
 # ── NMC ───────────────────────────────────────────────────────────────
 
+# The router's answer to a restore (HTTP 200): a page that passes the result to the web UI.
+_RESTORE_SUCCESS = (
+    "<html><head><script language=\"javascript\">window.parent.document.fire('sah:models:System:state', 'restore-success');"
+    "</script></head><body></body></html>\n"
+)
+# The web UI treats any other state as a failure. Only success has been seen on a router, so this state is made up.
+_RESTORE_FAILURE = _RESTORE_SUCCESS.replace("restore-success", "restore-error")
+
 
 class TestNMC:
     @pytest.mark.parametrize(
@@ -729,6 +737,55 @@ class TestNMC:
         svc = _make_resource(NMC, mock_session_manager)
         svc.reboot()
         assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/NMC:reboot", {"parameters": {"reason": "pyinternetbox"}})
+
+    def test_backup(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.download.return_value = "QUJD\n"
+        assert _make_resource(NMC, mock_session_manager).backup() == "QUJD\n"
+        mock_session_manager.download.assert_called_once_with("/backup")
+
+    @pytest.mark.parametrize("content", [b"QUJD\nRUZH\n", b"QUJD\r\nRUZH\r\n"])  # saved on Linux/macOS, or on Windows
+    def test_restore_uploads_the_backup(self, mock_session_manager: MagicMock, tmp_path, content: bytes) -> None:
+        backup = tmp_path / "my backup.cfg"
+        backup.write_bytes(content)
+        mock_session_manager.upload.return_value = _RESTORE_SUCCESS
+        assert _make_resource(NMC, mock_session_manager).restore(str(backup)) == _RESTORE_SUCCESS
+        mock_session_manager.upload.assert_called_once_with("/restore", "restore", "internetbox.cfg", b"QUJD\nRUZH\n")
+
+    @pytest.mark.parametrize("content", [b"", b"\n", b'{"status": true}', b"QUJD!\n", b"QUJ\n", "Bäckup".encode()])
+    def test_restore_refuses_other_files(self, mock_session_manager: MagicMock, tmp_path, content: bytes) -> None:
+        other = tmp_path / "other.cfg"
+        other.write_bytes(content)
+        with pytest.raises(ValueError, match="other.cfg isn't a configuration backup"):
+            _make_resource(NMC, mock_session_manager).restore(str(other))
+        mock_session_manager.upload.assert_not_called()
+
+    def test_restore_missing_file(self, mock_session_manager: MagicMock, tmp_path) -> None:
+        with pytest.raises(FileNotFoundError):
+            _make_resource(NMC, mock_session_manager).restore(str(tmp_path / "missing.cfg"))
+        mock_session_manager.upload.assert_not_called()
+
+    def test_restore_not_confirmed(self, mock_session_manager: MagicMock, tmp_path) -> None:
+        backup = tmp_path / "internetbox.cfg"
+        backup.write_bytes(b"QUJD\n")
+        mock_session_manager.upload.return_value = _RESTORE_FAILURE
+        with pytest.raises(ValueError, match="The router didn't confirm the restore. It answered: .*'restore-error'"):
+            _make_resource(NMC, mock_session_manager).restore(str(backup))
+
+    @pytest.mark.parametrize("status", ["Enabled", "Uploaded"])
+    def test_backup_to_swisscom(self, mock_session_manager: MagicMock, status: str) -> None:
+        mock_session_manager.post.side_effect = [json.dumps({"status": {"Status": status}}), '{"status": null}']
+        assert _make_resource(NMC, mock_session_manager).backup_to_swisscom() == '{"status": null}'
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [
+            ("/sysbus/NMC/NetworkConfig:get", {"parameters": {}}),
+            ("/sysbus/NMC/NetworkConfig:launchNetworkBackup", {"parameters": {}}),
+        ]
+
+    @pytest.mark.parametrize("response", ['{"status": {"Status": "Disabled"}}', '{"status": {}}'])
+    def test_backup_to_swisscom_turned_off(self, mock_session_manager: MagicMock, response: str) -> None:
+        mock_session_manager.post.return_value = response
+        with pytest.raises(ValueError, match="Backup to Swisscom isn't turned on for this router"):
+            _make_resource(NMC, mock_session_manager).backup_to_swisscom()
+        mock_session_manager.post.assert_called_once()  # the status, but no upload
 
 
 # ── Simple resource classes ───────────────────────────────────────────

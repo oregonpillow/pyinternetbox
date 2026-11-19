@@ -58,12 +58,12 @@ def main(
 
 
 def _output(raw: str) -> None:
-    """Pretty-print a JSON response to stdout (valid JSON, jq-compatible)."""
+    """Pretty-print a JSON response to stdout (valid JSON, jq-compatible). Other text is printed as it is, e.g. a backup file."""
     try:
         data = json.loads(raw)
         typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
     except (json.JSONDecodeError, ValueError):
-        typer.echo(raw)
+        typer.echo(raw, nl=not raw.endswith("\n"))
 
 
 def _make_client() -> InternetBoxClient:
@@ -94,6 +94,8 @@ def _friendly_errors() -> Iterator[None]:
         _fail(f"The router rejected the request: {exc}{_router_errors(exc.response)}")
     except ValueError as exc:  # invalid input caught by a resource method, e.g. a malformed MAC address
         _fail(str(exc))
+    except OSError as exc:  # a file that can't be read, e.g. a mistyped backup file name
+        _fail(str(exc))
 
 
 def _router_errors(response: requests.Response | None) -> str:
@@ -117,6 +119,10 @@ def _fail(message: str, hint: bool = False) -> NoReturn:
 # Commands that ask before running, unless given --yes: the question, and whether to ask, given the method's arguments.
 _CONFIRM = {
     ("nmc", "reboot"): ("Restart the router? Internet, Wi-Fi and phone will be down for a few minutes.", lambda args: True),
+    ("nmc", "restore"): (
+        "Replace all settings with this backup? The router then restarts: internet, Wi-Fi and phone will be down for a few minutes.",
+        lambda args: True,
+    ),
     ("wifi", "set_enabled"): (
         "Turn off all Wi-Fi networks? Every wireless device will lose its connection, including this computer if it's on Wi-Fi.",
         lambda args: not args["enable"],

@@ -21,6 +21,7 @@ _COMMANDS = [
     ("firewall", "set_port_forwarding"),
     ("scheduler", "set_device_schedule"),
     ("nmc", "reboot"),
+    ("nmc", "restore"),
 ]
 
 
@@ -125,6 +126,22 @@ def test_invalid_input_shows_message_instead_of_traceback() -> None:
     assert "Not a MAC address: 'not-a-mac'" in result.output
 
 
+def test_missing_file_shows_message_instead_of_traceback(tmp_path) -> None:
+    missing = tmp_path / "missing.cfg"
+    with patch.object(cli, "_make_client", lambda: InternetBoxClient(hostname="192.0.2.1", ssl_verify=False)):
+        result = runner.invoke(cli.app, ["nmc", "restore", str(missing), "--yes"])
+    assert result.exit_code == 1
+    assert f"No such file or directory: '{missing}'" in result.output
+
+
+def test_text_is_printed_as_it_is(client: MagicMock) -> None:
+    """A backup redirected to a file is the router's file, without an extra newline."""
+    client.nmc.backup.return_value = "QUJD\nRUZH\n"
+    result = runner.invoke(cli.app, ["nmc", "backup"])
+    assert result.exit_code == 0
+    assert result.stdout == "QUJD\nRUZH\n"
+
+
 def _http_error(body: bytes) -> requests.HTTPError:
     response = requests.Response()
     response.status_code, response._content = 500, body
@@ -153,6 +170,7 @@ def test_router_error_without_reasons(client: MagicMock, body: bytes) -> None:
 # Commands that ask for confirmation: CLI arguments, the question, and the call they make.
 _CONFIRMED = [
     (["nmc", "reboot", "--reason", "maintenance"], "Restart the router?", "nmc.reboot", {"reason": "maintenance"}),
+    (["nmc", "restore", "internetbox.cfg"], "Replace all settings with this backup?", "nmc.restore", {"path": "internetbox.cfg"}),
     (["wifi", "set-enabled", "false"], "Turn off all Wi-Fi networks?", "wifi.set_enabled", {"enable": False}),
 ]
 

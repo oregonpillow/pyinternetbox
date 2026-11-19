@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | Called by the web interface | 240 | 101 |
 | Functions exposed by the router (self-description) | 727 | 369 |
-| Implemented in pyinternetbox | 145 | 24 |
-| Web interface endpoints missing from pyinternetbox | 113 | 77 |
+| Implemented in pyinternetbox | 146 | 25 |
+| Web interface endpoints missing from pyinternetbox | 112 | 76 |
 | Writable parameters (generic `set`) on 315 objects | 1873 | 1873 |
 
 ## Endpoints used by the web interface
@@ -33,6 +33,7 @@
 | `Firewall:setPortForwarding` | ✏️ | ✅ | `description`, `destinationIPAddress`, `enable`, `externalPort`, `id`, `internalPort`, `origin`, `persistent`, `protocol`, `sourceInterface`, `sourcePrefix` |
 | `LEDs.LED.{id}:set` | ✏️ | ✅ | `Brightness` |
 | `NMC.Guest:set` | ✏️ | ✅ | `Enable` |
+| `NMC.NetworkConfig:launchNetworkBackup` | ✏️ | ✅ |  |
 | `NMC.Wifi:set` | ✏️ | ✅ | `ConfigurationMode`, `Enable` |
 | `NMC.WlanTimer:setActivationTimer` | ✏️ | ✅ | `InterfaceName`, `Timeout` |
 | `NMC:reboot` | ✏️ | ✅ | `reason` |
@@ -176,7 +177,6 @@
 | `NMC.Debug.DebugFile:set` | ✏️ |  | `GenerateFile` |
 | `NMC.LAN:addStaticRoute` | ✏️ |  | `Dst`, `DstLen`, `Enable`, `Gateway`, `Name` |
 | `NMC.LAN:deleteStaticRoute` | ✏️ |  |  |
-| `NMC.NetworkConfig:launchNetworkBackup` | ✏️ |  |  |
 | `NMC.PhonebookBackup:set` | ✏️ |  | `OptIn`, `TriggerACS` |
 | `NMC.WWAN:set` | ✏️ |  | `EnableTethering` |
 | `NMC.Wifi:setWPSEnable` | ✏️ |  | `enable` |
@@ -986,7 +986,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 ### `NMC.NetworkConfig`
 
 - `get()` 🌐 ✅
-- `launchNetworkBackup()` ✏️ 🌐
+- `launchNetworkBackup()` ✏️ 🌐 ✅
 - Writable parameters: `Status` (string)
 
 ### `NMC.Orientation`
