@@ -141,7 +141,8 @@ Notes:
 Dashboards can be found in the Grafana folder.
 
 <p align="center">
-  <img src="grafana/internetbox4.jpg" alt="Grafana Dashboard" width=600/>
+  <img src="grafana/internetbox4.jpg" alt="Grafana Dashboard" width="49%"/>
+  <img src="grafana/internetbox4_2.jpg" alt="Grafana Traffic Dashboard" width="49%"/>
 </p>
 
 ## Environment Variables
