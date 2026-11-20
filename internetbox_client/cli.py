@@ -17,6 +17,7 @@ import typer
 
 from internetbox_client import PROJECT_NAME, PROJECT_URL, __version__
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.confirmations import QUESTIONS
 
 if TYPE_CHECKING:
     from internetbox_client import InternetBoxClient
@@ -108,55 +109,7 @@ def _fail(message: str, hint: bool = False) -> NoReturn:
 # ── Dynamic CLI generation ────────────────────────────────────────────
 
 # Commands that ask before running, unless given --yes: the question, and whether to ask, given the method's arguments.
-_CONFIRM = {
-    ("nmc", "reboot"): ("Restart the router? Internet, Wi-Fi and phone will be down for a few minutes.", lambda args: True),
-    ("nmc", "restore"): (
-        "Replace all settings with this backup? The router then restarts: internet, Wi-Fi and phone will be down for a few minutes.",
-        lambda args: True,
-    ),
-    ("wifi", "set_enabled"): (
-        "Turn off all Wi-Fi networks? Every wireless device will lose its connection, including this computer if it's on Wi-Fi.",
-        lambda args: not args["enable"],
-    ),
-    ("wifi", "set_network"): (
-        "Change the Wi-Fi settings? Wireless devices lose their connection and must reconnect, with the new password if it changed.",
-        lambda args: True,
-    ),
-    ("wifi", "set_guest_network"): (
-        "Change the guest Wi-Fi settings? Devices on the guest network must reconnect, with the new password if it changed.",
-        lambda args: True,
-    ),
-    ("wifi", "set_guest_enabled"): ("Turn off the guest Wi-Fi? Devices on it will lose their connection.", lambda args: not args["enable"]),
-    ("wifi", "set_channel"): (
-        "Change the Wi-Fi channel? Devices on this band lose their connection for a moment, and for about a minute on 5 GHz "
-        "channels 52 to 112, where the router first listens for radar.",
-        lambda args: True,
-    ),
-    ("wifi", "search_channel"): (
-        "Let the router choose a new Wi-Fi channel now? If it changes, devices on this band lose their connection for a moment.",
-        lambda args: True,
-    ),
-    ("scheduler", "set_wifi_schedule"): (
-        "Turn Wi-Fi off on a schedule? During the off periods, every wireless device loses its connection, including this "
-        "computer if it's on Wi-Fi.",
-        lambda args: args["enable"] and bool(args["off_periods"]),
-    ),
-    ("scheduler", "enable_wifi_schedule"): (
-        "Turn on the Wi-Fi schedule? During its off periods, every wireless device loses its connection, including this "
-        "computer if it's on Wi-Fi.",
-        lambda args: args["enable"],
-    ),
-    ("firewall", "set_custom_policy"): (
-        "Block all outgoing traffic that no custom rule allows? While the firewall level is Custom, devices then lose "
-        "internet access except for the ports that rules allow.",
-        lambda args: args["action"] == "block" and args["direction"] == "outbound",
-    ),
-    ("wireguard", "set_server_enabled"): (
-        "Turn off the WireGuard VPN server? Connected VPN clients lose their connection.",
-        lambda args: not args["enable"],
-    ),
-    ("voice", "clear_call_list"): ("Delete all calls from the call list? They can't be brought back.", lambda args: True),
-}
+_CONFIRM = QUESTIONS
 
 
 def _base_type(ann: object) -> object:
@@ -439,6 +392,94 @@ def export(
         typer.echo("Stopping exporter...")
         collector.stop()
         client.close()
+
+
+# ── MCP server ───────────────────────────────────────────────────────
+
+
+@app.command(name="mcp")
+def mcp_server(
+    allow_writes: Annotated[bool, typer.Option("--allow-writes", help="Offer tools that change settings.")] = False,
+    allow_disruptive: Annotated[
+        bool,
+        typer.Option(
+            "--allow-disruptive",
+            help="Also offer changes that cut the Wi-Fi or internet for others, e.g. a restart. Implies --allow-writes.",
+        ),
+    ] = False,
+    show_secrets: Annotated[bool, typer.Option("--show-secrets", help="Show passwords and keys to the AI app.")] = False,
+    metrics_url: Annotated[
+        Optional[str],
+        typer.Option("--metrics-url", envvar="IB_MCP_METRICS_URL", help="Send usage metrics to `ibox mcp-exporter` at this URL."),
+    ] = None,
+) -> None:
+    """Start an MCP server over stdio, for AI apps such as OpenCode or Claude Desktop.
+
+    The app starts this command itself: see the README for its configuration.
+    Reads are always offered; changes need --allow-writes or --allow-disruptive.
+    Needs pyinternetbox's optional mcp dependencies (see the README).
+    """
+    try:
+        from internetbox_client.mcp_server.server import Options, build_server
+    except ImportError as exc:
+        if not (exc.name or "").startswith(("mcp", "pydantic")):
+            raise
+        _fail(
+            'The MCP server needs the mcp extra: pip install "pyinternetbox[mcp]", or run it with uvx --from "pyinternetbox[mcp]" ibox mcp'
+        )
+    from internetbox_client.mcp_server.metrics import MetricsSender
+
+    if not _password:
+        _fail("The MCP server needs the router password: set IB_PASSWORD, or give --password before mcp.")
+    sender = None
+    if metrics_url:
+        try:
+            sender = MetricsSender(metrics_url)
+        except ValueError as exc:
+            _fail(str(exc))
+    client = _make_client()
+    # A distinct application name, so the server's session doesn't end a browser session on the router.
+    client._sm.application_name = "pyinternetbox-mcp"
+    options = Options(allow_writes=allow_writes, allow_disruptive=allow_disruptive, show_secrets=show_secrets)
+    try:
+        build_server(client, options, sender).run("stdio")  # stdout carries the MCP messages: nothing else may print there
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if sender is not None:
+            sender.close()
+        client.close()
+
+
+@app.command(name="mcp-exporter")
+def mcp_exporter(
+    host: Annotated[
+        str, typer.Option("--host", envvar="IB_MCP_EXPORTER_HOST", help="Address to listen on. 0.0.0.0 accepts events from other hosts.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", "-P", envvar="IB_MCP_EXPORTER_PORT", help="TCP port to listen on.")] = 9102,
+) -> None:
+    """Collect usage metrics from `ibox mcp` servers and serve them to Prometheus at /metrics.
+
+    Start the MCP servers with --metrics-url http://HOST:PORT. Needs no router access.
+    """
+    import signal
+
+    from internetbox_client.mcp_server.exporter import make_server
+
+    try:
+        server = make_server(host, port)
+    except OSError as exc:
+        _fail(f"Could not listen on {host}:{port}: {exc}")
+    typer.echo(f"{PROJECT_NAME} {__version__}  |  {PROJECT_URL}")
+    typer.echo(f"MCP metrics collector listening on http://{host}:{port}: metrics at /metrics, events to POST /events")
+    signal.signal(signal.SIGTERM, lambda _sig, _frame: threading.Thread(target=server.shutdown).start())
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        typer.echo("Stopping MCP metrics collector...")
+        server.server_close()
 
 
 if __name__ == "__main__":

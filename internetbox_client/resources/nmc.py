@@ -73,10 +73,19 @@ class NMC(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/NMC:getIPConflicts", data, auth_required=False)
 
-    def wan_status(self) -> str:
-        """Get WAN status"""
+    def wan_status(self, details: bool = False) -> str:
+        """Get the internet connection's status: link type and state, protocol and connection state.
+
+        Args:
+            details (bool): also get the public IPv4 and IPv6 addresses, the delegated IPv6 prefix, the gateway and the
+                provider's DNS servers. Needs the password. Default is False, which works without it.
+
+        Returns:
+            str: response content
+
+        """
         data = {"parameters": {}}
-        return self.post("/sysbus/NMC:getWANStatus", data, auth_required=False)
+        return self.post("/sysbus/NMC:getWANStatus", data, auth_required=details)
 
     def orientation(self) -> str:
         """Get device orientation"""

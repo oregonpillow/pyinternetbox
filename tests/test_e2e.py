@@ -1577,3 +1577,65 @@ class TestE2EWWAN:
 
     def test_device_results(self, svc):
         _ok(svc.device_results())
+
+
+# ── MCP server ────────────────────────────────────────────────────────────────
+
+
+class TestE2EMCP:
+    """The MCP server's read tools, through an in-process MCP client. Needs the mcp extra."""
+
+    @pytest.fixture(scope="class")
+    def server(self, sm):
+        from unittest.mock import patch
+
+        from internetbox_client import InternetBoxClient
+
+        server_module = pytest.importorskip("internetbox_client.mcp_server.server")
+        with patch("internetbox_client.client.SessionManager", return_value=sm):
+            client = InternetBoxClient()
+        return server_module.build_server(client)
+
+    @staticmethod
+    def _call(server, tool: str, arguments: dict | None = None) -> str:
+        import asyncio
+
+        from mcp import Client
+
+        async def main():
+            async with Client(server, mode="legacy") as client:
+                return await client.call_tool(tool, arguments or {})
+
+        result = asyncio.run(main())
+        assert not result.is_error, result.content[0].text
+        return result.content[0].text
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            "router_overview",
+            "list_devices",
+            "wifi_overview",
+            "internet_status",
+            "firewall_overview",
+            "dns_settings",
+            "lan_settings",
+            "parental_controls",
+            "remote_access",
+            "speed_test_results",
+            "list_router_functions",
+        ],
+    )
+    def test_read_tools(self, server, tool):
+        answer = json.loads(self._call(server, tool))
+        if isinstance(answer, dict):
+            assert [part for part, value in answer.items() if isinstance(value, dict) and "error" in value] == []
+
+    def test_passwords_are_hidden(self, server, sm):
+        passwords = {network["password"] for network in json.loads(Wifi(session_manager=sm).summary())["networks"] if network["password"]}
+        answer = self._call(server, "wifi_overview")
+        assert passwords and not any(password in answer for password in passwords)
+        assert '"password":"<hidden>"' in answer
+
+    def test_call_router_function(self, server):
+        assert json.loads(self._call(server, "call_router_function", {"function": "wifi.radio", "arguments": {"id": 0}}))["status"]

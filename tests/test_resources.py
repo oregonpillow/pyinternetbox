@@ -1242,6 +1242,11 @@ class TestNMC:
         else:
             assert auth_val is True
 
+    def test_wan_status_details_need_the_password(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(NMC, mock_session_manager)
+        svc.wan_status(details=True)
+        assert mock_session_manager.post.call_args[0] == ("/sysbus/NMC:getWANStatus", {"parameters": {}}, True)
+
     def test_bdd_uses_ws(self, mock_session_manager: MagicMock) -> None:
         svc = _make_resource(NMC, mock_session_manager)
         svc.bdd()

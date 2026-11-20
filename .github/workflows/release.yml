@@ -1,7 +1,7 @@
 name: Release
 
 # master push  -> Docker image  oregonpillow/pyinternetbox:edge
-# tag vX.Y.Z   -> PyPI package, Docker images :X.Y.Z, :X.Y and :latest, GitHub Release
+# tag vX.Y.Z   -> PyPI package, Docker images :X.Y.Z, :X.Y and :latest, GitHub Release with the notes from CHANGELOG.md
 #
 # The version always comes from the git tag (via hatch-vcs); nothing else needs bumping.
 
@@ -31,6 +31,11 @@ jobs:
         with:
           fetch-depth: 0 # hatch-vcs needs the tags to compute the version
 
+      # Before anything is published: a release needs its notes in CHANGELOG.md.
+      - name: Release notes from CHANGELOG.md
+        if: github.ref_type == 'tag'
+        run: python3 scripts/release_notes.py "$GITHUB_REF_NAME" > release-notes.md
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -53,6 +58,12 @@ jobs:
         with:
           name: dist
           path: dist/
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: release-notes
+          path: release-notes.md
 
   pypi:
     if: github.ref_type == 'tag'
@@ -122,8 +133,13 @@ jobs:
           name: dist
           path: dist/
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: true # adds the "Full Changelog" link below the notes

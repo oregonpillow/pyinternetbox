@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import operator
+import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from unittest.mock import MagicMock, patch
@@ -333,3 +334,67 @@ def test_disruptive_commands_ask_first() -> None:
     }
     assert disruptive
     assert disruptive <= set(cli._CONFIRM)
+
+
+# ── MCP server and its metrics collector ──────────────────────────────
+
+
+def test_mcp_needs_the_password() -> None:
+    result = runner.invoke(cli.app, ["mcp"], env={"IB_PASSWORD": ""})
+    assert result.exit_code == 1
+    assert "The MCP server needs the router password" in result.output
+
+
+def test_mcp_checks_the_metrics_url() -> None:
+    result = runner.invoke(cli.app, ["-p", "secret", "mcp", "--metrics-url", "ftp://127.0.0.1"])
+    assert result.exit_code == 1
+    assert "The metrics URL must look like http://127.0.0.1:9102" in result.output
+
+
+def test_mcp_without_the_extra() -> None:
+    missing = {name: None for name in sys.modules if name == "mcp" or name.startswith("mcp.")}
+    with patch.dict(sys.modules, missing):
+        sys.modules.pop("internetbox_client.mcp_server.server", None)
+        result = runner.invoke(cli.app, ["-p", "secret", "mcp"])
+    assert result.exit_code == 1
+    assert 'pip install "pyinternetbox[mcp]"' in result.output
+
+
+def test_mcp_runs_the_server() -> None:
+    from internetbox_client.mcp_server.metrics import MetricsSender
+    from internetbox_client.mcp_server.server import Options
+
+    client = MagicMock()
+    with (
+        patch.object(cli, "_make_client", return_value=client),
+        patch("internetbox_client.mcp_server.server.build_server") as build_server,
+        patch.object(MetricsSender, "close") as close_sender,
+    ):
+        result = runner.invoke(cli.app, ["-p", "secret", "mcp", "--allow-disruptive", "--metrics-url", "http://127.0.0.1:9"])
+    assert result.exit_code == 0, result.output
+    assert result.output == ""  # stdout carries the MCP messages
+    built_client, options, sender = build_server.call_args[0]
+    assert built_client is client
+    assert options == Options(allow_writes=False, allow_disruptive=True, show_secrets=False)
+    assert isinstance(sender, MetricsSender)
+    build_server.return_value.run.assert_called_once_with("stdio")
+    assert client._sm.application_name == "pyinternetbox-mcp"
+    close_sender.assert_called_once()
+    client.close.assert_called_once()
+
+
+def test_mcp_exporter() -> None:
+    with patch("internetbox_client.mcp_server.exporter.make_server") as make_server:
+        make_server.return_value.serve_forever.side_effect = KeyboardInterrupt
+        result = runner.invoke(cli.app, ["mcp-exporter", "--port", "9999"])
+    assert result.exit_code == 0
+    make_server.assert_called_once_with("127.0.0.1", 9999)
+    assert "listening on http://127.0.0.1:9999" in result.output
+    make_server.return_value.server_close.assert_called_once()
+
+
+def test_mcp_exporter_port_in_use() -> None:
+    with patch("internetbox_client.mcp_server.exporter.make_server", side_effect=OSError("Address already in use")):
+        result = runner.invoke(cli.app, ["mcp-exporter"])
+    assert result.exit_code == 1
+    assert "Could not listen on 127.0.0.1:9102: Address already in use" in result.output

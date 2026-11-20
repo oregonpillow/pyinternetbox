@@ -1,7 +1,7 @@
 [project]
 name = "pyinternetbox"
 dynamic = ["version"]
-description = "Internet Box API client and exporter for Swisscom and Wingo routers."
+description = "Internet Box API client, MCP server and exporter for Swisscom and Wingo routers."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -37,6 +37,12 @@ Releases = "https://github.com/oregonpillow/pyinternetbox/releases"
 
 [project.scripts]
 ibox = "internetbox_client.cli:app"
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.3.0",
+    "pydantic>=2.12.0",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -85,6 +91,7 @@ omit = ["internetbox_client/cli.py"]
 [dependency-groups]
 dev = [
     "deptry>=0.25.1",
+    "mcp>=2.3.0",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.8",
