@@ -1,7 +1,8 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/docs/logo.svg" width="400px" alt="Grafana Dashboard" />
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4.jpg" width="100%" alt="Grafana Dashboard" />
   <h1 style="font-size: 28px; margin: 10px 0;">pyinternetbox</h1>
-  <p>Python library and CLI tool (with built in exporter) for Swisscom / Wingo Internet Box routers.</p>
+  <p style="font-size: 16px; margin: 0;"><b>Your Swisscom Internet Box, fully observable and programmable.</b></p>
+  <p>Python library, CLI tool, MCP server and exporters for Swisscom / Wingo Internet Box routers.</p>
 </div>
 <br>
 
@@ -208,8 +209,7 @@ Notes:
 Dashboards can be found in the Grafana folder.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4.jpg" alt="Grafana Dashboard" width="49%"/>
-  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4_2.jpg" alt="Grafana Traffic Dashboard" width="49%"/>
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4_2.jpg" alt="Grafana Traffic Dashboard" width="100%"/>
 </p>
 
 ## 🤖 MCP Server
@@ -217,6 +217,10 @@ Dashboards can be found in the Grafana folder.
 `ibox mcp` is an [MCP](https://modelcontextprotocol.io/) server: it lets an AI app such as [OpenCode](https://opencode.ai/) or Claude Desktop look at your router, e.g. "which devices are on the Wi-Fi?" or "why is my internet slow?", and change settings if you allow it. The app starts the server itself and talks to it over stdio, on your computer.
 
 It needs the optional `mcp` dependencies: `pip install "pyinternetbox[mcp]"`, or no install at all with `uvx --from "pyinternetbox[mcp]" ibox mcp`.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/docs/mcp-example.jpg" alt="OpenCode answering &quot;what devices are connected to my wifi?&quot; with the ibox MCP server" width="80%"/>
+</p>
 
 ### Setup in OpenCode
 
