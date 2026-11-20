@@ -10,6 +10,6 @@ class WebUI(APIClient):
         return self.post("/sysbus/WebuiupgradeService:get", data)
 
     def release_notes(self) -> str:
-        """Get WebUI release notes"""
+        """Get WebUI release notes. Refused on the Internet Box 4, even for the admin account (HTTP 401)."""
         data = {"parameters": {}}
         return self.post("/sysbus/WebuiupgradeService:getReleaseNotes", data)

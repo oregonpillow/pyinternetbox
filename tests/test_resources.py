@@ -7,10 +7,14 @@ expected payload via the mocked SessionManager.
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
+import internetbox_client.resources as resources
 from internetbox_client.resources.ap_services import APServices
 from internetbox_client.resources.carddav import CardDav
 from internetbox_client.resources.debug import Debug
@@ -55,6 +59,14 @@ def _make_resource(cls: type, sm: MagicMock):
     obj._sm = sm
     obj._owns_session = False
     return obj
+
+
+def test_sysbus_paths_use_slashes() -> None:
+    """The router drops the connection for a path like /sysbus/VoiceService.VoiceApplication:listTrunks."""
+    source = "".join(path.read_text() for path in pathlib.Path(resources.__file__).parent.glob("*.py"))
+    objects = re.findall(r"[\"']/sysbus/([^\"':{]*)", source)
+    assert len(objects) > 100
+    assert [obj for obj in objects if "." in obj] == []
 
 
 # ── APServices ────────────────────────────────────────────────────────
@@ -115,6 +127,7 @@ class TestDECT:
             ("pairing_status", "/sysbus/DECT:getPairingStatus"),
             ("standard_version", "/sysbus/DECT:getStandardVersion"),
             ("name", "/sysbus/DECT:getName"),
+            ("ringtone", "/sysbus/VoiceService/VoiceApplication:getRingtone"),
         ],
     )
     def test_endpoints(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
@@ -180,6 +193,90 @@ class TestDevices:
             "/sysbus/WOL:sendWakeOnLan",
             {"parameters": {"hostID": "AA:BB:CC:DD:EE:FF", "broadcast": True, "retries": 3, "interval": 60000}},
         )
+
+    def test_summary(self, mock_session_manager: MagicMock) -> None:
+        devices = [
+            {
+                "Key": "AA:BB:CC:DD:EE:01",
+                "Name": "iPhone",
+                "DeviceType": "iPhone",
+                "Manufacturer": "Apple",
+                "IPAddress": "192.168.1.20",
+                "Active": True,
+                "InterfaceName": "wl0",
+                "OperatingFrequencyBand": "5GHz",
+                "SignalStrength": -45,
+                "LastConnection": "2026-11-19T20:18:29Z",
+                "Actions": [{"Function": "setName"}],
+            },
+            {
+                "Key": "AA:BB:CC:DD:EE:02",
+                "Name": "NAS",
+                "DeviceType": "Computer",
+                "Manufacturer": "",
+                "MACVendor": "Synology",
+                "IPAddress": "192.168.1.5",
+                "Active": True,
+                "InterfaceName": "ETH4",
+                "LastConnection": "2026-11-19T20:15:47Z",
+            },
+            {
+                "Key": "AA:BB:CC:DD:EE:03",
+                "Name": "Tablet",
+                "Active": False,
+                "InterfaceName": "wlguest2",
+                "SignalStrength": -70,
+                "IPAddress": "",
+            },
+            {"Key": "AA:BB:CC:DD:EE:04", "Name": "Printer", "Active": False, "InterfaceName": "", "LastConnection": "2026-10-01T08:00:00Z"},
+        ]
+        mock_session_manager.post.return_value = json.dumps({"status": devices})
+        svc = _make_resource(Devices, mock_session_manager)
+        assert json.loads(svc.summary()) == [
+            {
+                "name": "iPhone",
+                "mac": "AA:BB:CC:DD:EE:01",
+                "ip": "192.168.1.20",
+                "type": "iPhone",
+                "manufacturer": "Apple",
+                "connected": True,
+                "connection": "Wi-Fi 5GHz",
+                "last_connection": "2026-11-19T20:18:29Z",
+                "signal_dbm": -45,
+            },
+            {
+                "name": "NAS",
+                "mac": "AA:BB:CC:DD:EE:02",
+                "ip": "192.168.1.5",
+                "type": "Computer",
+                "manufacturer": "Synology",
+                "connected": True,
+                "connection": "Ethernet (ETH4)",
+                "last_connection": "2026-11-19T20:15:47Z",
+            },
+            # Signal strengths of devices that aren't connected are old.
+            {
+                "name": "Tablet",
+                "mac": "AA:BB:CC:DD:EE:03",
+                "ip": None,
+                "type": None,
+                "manufacturer": None,
+                "connected": False,
+                "connection": "guest Wi-Fi",
+                "last_connection": None,
+            },
+            {
+                "name": "Printer",
+                "mac": "AA:BB:CC:DD:EE:04",
+                "ip": None,
+                "type": None,
+                "manufacturer": None,
+                "connected": False,
+                "connection": None,
+                "last_connection": "2026-10-01T08:00:00Z",
+            },
+        ]
+        assert mock_session_manager.post.call_args[0][1]["parameters"]["expression"] == "lan and not self"
 
 
 class TestDevicesRemove:
@@ -380,6 +477,40 @@ class TestDNS:
         getattr(svc, method)()
         assert mock_session_manager.post.call_args[0][0] == endpoint
 
+    @pytest.mark.parametrize(
+        "method,endpoint,servers,stored",
+        [
+            ("set_device_servers", "/sysbus/NMC/DHCPv4/DNSServers/User:set", ["1.1.1.1", " 9.9.9.9 "], "1.1.1.1,9.9.9.9"),
+            ("set_device_servers", "/sysbus/NMC/DHCPv4/DNSServers/User:set", [], ""),
+            ("set_device_servers_ipv6", "/sysbus/NMC/DHCPv6/DNSServers/User:set", ["2606:4700:4700:0::1111"], "2606:4700:4700::1111"),
+            ("set_device_servers_ipv6", "/sysbus/NMC/DHCPv6/DNSServers/User:set", [], ""),
+        ],
+    )
+    def test_set_device_servers(self, mock_session_manager: MagicMock, method: str, endpoint: str, servers: list, stored: str) -> None:
+        svc = _make_resource(DNS, mock_session_manager)
+        getattr(svc, method)(servers)
+        assert mock_session_manager.post.call_args[0][:2] == (endpoint, {"parameters": {"DNSServers": stored}})
+
+    @pytest.mark.parametrize(
+        "method,servers,message",
+        [
+            ("set_device_servers", ["1.1.1.1", "1.0.0.1", "9.9.9.9"], "at most 2 DNS servers, got 3"),
+            ("set_device_servers", ["dns.google"], "'dns.google' isn't an IPv4 address"),
+            ("set_device_servers", ["2606:4700:4700::1111"], "isn't an IPv4 address"),
+            ("set_device_servers_ipv6", ["1.1.1.1"], "'1.1.1.1' isn't an IPv6 address"),
+        ],
+    )
+    def test_set_device_servers_checks_addresses(self, mock_session_manager: MagicMock, method: str, servers: list, message: str) -> None:
+        svc = _make_resource(DNS, mock_session_manager)
+        with pytest.raises(ValueError, match=message):
+            getattr(svc, method)(servers)
+        mock_session_manager.post.assert_not_called()
+
+    def test_flush_cache(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(DNS, mock_session_manager)
+        svc.flush_cache()
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/DNS/Server/Cache:flush", {"parameters": {}})
+
 
 # ── DynDNS ────────────────────────────────────────────────────────────
 
@@ -483,12 +614,18 @@ class TestFirewall:
             ("port_forwarding", "/sysbus/Firewall:getPortForwarding"),
             ("custom_rule", "/sysbus/Firewall:getCustomRule"),
             ("delete_dmz", "/sysbus/Firewall:deleteDMZ"),
+            ("status", "/sysbus/Firewall:get"),
         ],
     )
     def test_endpoints(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
         svc = _make_resource(Firewall, mock_session_manager)
         getattr(svc, method)()
         assert mock_session_manager.post.call_args[0][0] == endpoint
+
+    def test_set_upnp_enabled(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_upnp_enabled(True)
+        mock_session_manager.post.assert_called_once_with("/sysbus/Firewall:set", {"parameters": {"UpnpPortForwardingEnable": True}}, True)
 
     @pytest.mark.parametrize(
         "method,endpoint,level",
@@ -838,6 +975,23 @@ class TestPhonebook:
         assert data["parameters"]["contact"] == contact
         assert mock_session_manager.post.call_args[0][0] == "/sysbus/Phonebook:addContactAndGenUUID"
 
+    def test_modify_contact(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Phonebook, mock_session_manager)
+        contact = {"name": "N:Test", "formattedName": "Test", "telephoneNumbers": []}
+        svc.modify_contact("abc-123", contact)
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Phonebook:modifyContactByUniqueID",
+            {"parameters": {"uniqueID": "abc-123", "contact": contact}},
+        )
+
+    def test_delete_contact(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Phonebook, mock_session_manager)
+        svc.delete_contact("abc-123")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Phonebook:removeContactByUniqueID",
+            {"parameters": {"uniqueID": "abc-123"}},
+        )
+
 
 # ── Security ──────────────────────────────────────────────────────────
 
@@ -846,7 +1000,7 @@ class TestSecurity:
     @pytest.mark.parametrize(
         "method,endpoint",
         [
-            ("gateway_status", "/sysbus/SecurityGateway:get"),
+            ("home_security_status", "/sysbus/RouterSecurityAgent:get"),
             ("user_exposure_status", "/sysbus/NMC/Security:get"),
             ("package_management_status", "/sysbus/PackageManager/Package/security:_get"),
         ],
@@ -1140,6 +1294,19 @@ class TestVoice:
         svc.trunks()
         assert mock_session_manager.post.call_args[0][2] is False  # auth_required
 
+    def test_delete_call(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Voice, mock_session_manager)
+        svc.delete_call("42")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/VoiceService/VoiceApplication:clearCallList",
+            {"parameters": {"callId": "42"}},
+        )
+
+    def test_clear_call_list(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Voice, mock_session_manager)
+        svc.clear_call_list()
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/VoiceService/VoiceApplication:clearCallList", {"parameters": {}})
+
 
 # ── Wifi ──────────────────────────────────────────────────────────────
 
@@ -1202,6 +1369,265 @@ class TestWifi:
         svc = _make_resource(Wifi, mock_session_manager)
         svc.set_guest_enabled(False)
         mock_session_manager.post.assert_called_once_with("/sysbus/NMC/Guest:set", {"parameters": {"Enable": False}}, True)
+
+    def test_set_wps_enabled(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Wifi, mock_session_manager)
+        svc.set_wps_enabled(False)
+        mock_session_manager.post.assert_called_once_with("/sysbus/NMC/Wifi:setWPSEnable", {"parameters": {"enable": False}}, True)
+
+    def test_start_wps_pairing(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = ['{"status": null, "data": {"WPSEnable": true}}', '{"status": true}']
+        svc = _make_resource(Wifi, mock_session_manager)
+        assert svc.start_wps_pairing() == '{"status": true}'
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/NMC/Wifi:startPairing", {"parameters": {}})
+
+    def test_start_wps_pairing_needs_wps(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.return_value = '{"status": null, "data": {"WPSEnable": false}}'
+        svc = _make_resource(Wifi, mock_session_manager)
+        with pytest.raises(ValueError, match=r"WPS is turned off.*set_wps_enabled\(True\)"):
+            svc.start_wps_pairing()
+        mock_session_manager.post.assert_called_once()  # only the status
+
+    def test_stop_wps_pairing(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Wifi, mock_session_manager)
+        svc.stop_wps_pairing()
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/NMC/Wifi:stopPairing", {"parameters": {}})
+
+
+def _wlan_mibs(access_points: dict[str, tuple[str, str, str, str]], mode: str = "WPA2-WPA3-Personal") -> str:
+    """A getMIBs answer for access points given as name: (radio, band, SSID, password). Like the router's, the access
+    points' RadioReference is empty: their radio is in "base"."""
+    return json.dumps(
+        {
+            "status": {
+                "wlanvap": {
+                    name: {
+                        "SSID": ssid,
+                        "SSIDAdvertisementEnabled": True,
+                        "RadioReference": "",
+                        "Security": {"KeyPassPhrase": password, "WEPKey": "", "ModeEnabled": mode},
+                        "VAPStatus": "Up",
+                        "ActiveAssociatedDeviceNumberOfEntries": 2,
+                    }
+                    for name, (_, _, ssid, password) in access_points.items()
+                },
+                "wlanradio": {
+                    radio: {"OperatingFrequencyBand": band, "Channel": 36 if band == "5GHz" else 6}
+                    for radio, band, _, _ in access_points.values()
+                },
+                "base": {name: {"LLIntf": {radio: {"Name": radio}}} for name, (radio, *_) in access_points.items()},
+            }
+        }
+    )
+
+
+_WL0 = ("wifi0_bcm", "5GHz", "Home", "Old-Password-1")
+_WL1 = ("wifi1_bcm", "2.4GHz", "Home", "Old-Password-1")
+_WLGUEST2 = ("wifi1_bcm", "2.4GHz", "Visitors", "Guest-Password-1")
+_SSW_SSIDS = json.dumps(
+    {
+        "status": {
+            "priv5g": {"Band": "5", "PersistentEnable": True},
+            "priv6g": {"Band": "6", "PersistentEnable": True},
+            "guest6g": {"Band": "6", "PersistentEnable": False},
+        }
+    }
+)
+
+
+class TestWifiNetwork:
+    """set_network() and set_guest_network(), against a router with 5 and 2.4 GHz and a 2.4 GHz guest network."""
+
+    @staticmethod
+    def _router(sm: MagicMock, lan: str | None = None, combined: bool = False, answers: dict | None = None) -> Wifi:
+        responses = {
+            "/sysbus/NeMo/Intf/lan:getMIBs": lan or _wlan_mibs({"wl0": _WL0, "wl1": _WL1}),
+            # The guest interface also lists the 5 GHz access point.
+            "/sysbus/NeMo/Intf/guest:getMIBs": _wlan_mibs({"wlguest2": _WLGUEST2, "wl0": _WL0}),
+            "/sysbus/NMC/Wifi:get": json.dumps(
+                {"status": None, "data": {"Enable": True, "ConfigurationMode": combined, "WPSEnable": True}}
+            ),
+            "/sysbus/SSW/DataElements/Network/SSID:get": _SSW_SSIDS,
+            **(answers or {}),
+        }
+
+        def post(endpoint: str, data: dict | None = None, auth_required: bool = True) -> str:
+            answer = responses.get(endpoint, '{"status": null}')
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        sm.post.side_effect = post
+        return _make_resource(Wifi, sm)
+
+    @staticmethod
+    def _writes(sm: MagicMock) -> list[tuple]:
+        return [c[0][:2] for c in sm.post.call_args_list if not c[0][0].endswith((":get", ":getMIBs"))]
+
+    @staticmethod
+    def _vap(name: str, ssid: str, password: str, visible: bool = True) -> tuple:
+        security = {"KeyPassPhrase": password, "WEPKey": "", "ModeEnabled": "WPA2-WPA3-Personal"}
+        settings = {"SSID": ssid, "SSIDAdvertisementEnabled": visible, "Security": security}
+        return f"/sysbus/NeMo/Intf/{name}:setWLANConfig", {"parameters": {"mibs": {"wlanvap": {name: settings}}}}
+
+    def test_summary(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager)
+
+        def network(name: str, band: str, ssid: str, password: str, channel: int) -> dict:
+            return {
+                "network": name,
+                "band": band,
+                "ssid": ssid,
+                "password": password,
+                "encryption": "WPA2-WPA3-Personal",
+                "up": True,
+                "visible": True,
+                "channel": channel,
+                "connected_devices": 2,
+            }
+
+        assert json.loads(svc.summary()) == {
+            "enabled": True,
+            "bands_share_settings": False,
+            "wps": True,
+            "networks": [
+                network("Wi-Fi", "5GHz", "Home", "Old-Password-1", 36),
+                network("Wi-Fi", "2.4GHz", "Home", "Old-Password-1", 6),
+                network("guest Wi-Fi", "2.4GHz", "Visitors", "Guest-Password-1", 6),
+            ],
+        }
+        assert self._writes(mock_session_manager) == []
+
+    def test_changes_all_bands_and_copies_5ghz_to_6ghz(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager)
+        assert svc.set_network(password="New-Password-2") == '{"status": null}'
+        mirrored = {
+            "Enable": True,
+            "PersistentEnable": True,
+            "SSID": "Home",
+            "SSIDAdvertisementEnabled": True,
+            "PassPhrase": "New-Password-2",
+        }
+        assert self._writes(mock_session_manager) == [
+            self._vap("wl0", "Home", "New-Password-2"),
+            ("/sysbus/SSW/DataElements/Network/SSID/priv6g:set", {"parameters": mirrored}),
+            self._vap("wl1", "Home", "New-Password-2"),
+        ]
+
+    def test_one_band_keeps_the_other(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager)
+        svc.set_network(ssid="Home 2G", visible=False, band="2.4GHz")
+        assert self._writes(mock_session_manager) == [self._vap("wl1", "Home 2G", "Old-Password-1", visible=False)]
+
+    def test_writing_current_values_back_skips_checks(self, mock_session_manager: MagicMock) -> None:
+        """A password the web UI would refuse today, e.g. set before the rules got stricter, can be written back."""
+        weak = ("wifi1_bcm", "2.4GHz", "Home", "weak")
+        svc = self._router(mock_session_manager, lan=_wlan_mibs({"wl0": (*_WL0[:3], "weak"), "wl1": weak}))
+        svc.set_network(ssid="Home", password="weak")
+        assert [endpoint for endpoint, _ in self._writes(mock_session_manager) if endpoint.endswith(":setWLANConfig")] == [
+            "/sysbus/NeMo/Intf/wl0:setWLANConfig",
+            "/sysbus/NeMo/Intf/wl1:setWLANConfig",
+        ]
+
+    def test_6ghz_errors_are_ignored(self, mock_session_manager: MagicMock) -> None:
+        error = requests.HTTPError("500 Server Error")
+        svc = self._router(mock_session_manager, answers={"/sysbus/SSW/DataElements/Network/SSID/priv6g:set": error})
+        svc.set_network(visible=False, band="5GHz")
+        assert self._writes(mock_session_manager)[0] == self._vap("wl0", "Home", "Old-Password-1", visible=False)
+
+    def test_without_6ghz_network(self, mock_session_manager: MagicMock) -> None:
+        no_6ghz = json.dumps({"status": {"priv5g": {"Band": "5", "PersistentEnable": True}}})
+        svc = self._router(mock_session_manager, answers={"/sysbus/SSW/DataElements/Network/SSID:get": no_6ghz})
+        svc.set_network(visible=False, band="5GHz")
+        assert self._writes(mock_session_manager) == [self._vap("wl0", "Home", "Old-Password-1", visible=False)]
+
+    def test_band_the_router_doesnt_have(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager, lan=_wlan_mibs({"wl1": _WL1}))
+        with pytest.raises(ValueError, match="no 5GHz Wi-Fi network"):
+            svc.set_network(visible=False, band="5GHz")
+        assert self._writes(mock_session_manager) == []
+
+    @pytest.mark.parametrize(
+        "kwargs,message",
+        [
+            ({}, "Nothing to change"),
+            ({"visible": False, "band": "6GHz"}, 'band must be "2.4GHz" or "5GHz"'),
+            ({"ssid": "x"}, "must be 2 to 32"),
+            ({"ssid": "a" * 33}, "must be 2 to 32"),
+            ({"ssid": "Café"}, "must be 2 to 32"),
+            ({"ssid": " Home"}, "must not start or end with a space"),
+            ({"ssid": "Visitors"}, "must be different from the guest Wi-Fi name"),
+            ({"password": "Short-1"}, "must be 12 to 63"),
+            ({"password": "no-upper-case-1"}, "must contain a lower-case letter, an upper-case letter, a digit and a symbol"),
+            ({"password": "NoSymbolsHere1"}, "must contain a lower-case letter"),
+            ({"password": "Guest-Password-1"}, "must be different from the guest Wi-Fi password"),
+            ({"password": "New-Password-2", "band": "5GHz"}, "5GHz and 2.4GHz networks would have the same name but different passwords"),
+        ],
+    )
+    def test_refuses_before_changing_anything(self, mock_session_manager: MagicMock, kwargs: dict, message: str) -> None:
+        svc = self._router(mock_session_manager)
+        with pytest.raises(ValueError, match=message) as error:
+            svc.set_network(**kwargs)
+        if "password" in kwargs:
+            assert kwargs["password"] not in str(error.value)
+        assert self._writes(mock_session_manager) == []
+
+    def test_band_needs_separate_mode(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager, combined=True)
+        with pytest.raises(ValueError, match="combined mode"):
+            svc.set_network(visible=False, band="5GHz")
+        assert self._writes(mock_session_manager) == []
+
+    def test_no_password_without_encryption(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager, lan=_wlan_mibs({"wl0": _WL0, "wl1": _WL1}, mode="None"))
+        with pytest.raises(ValueError, match="has no encryption"):
+            svc.set_network(password="New-Password-2")
+        assert self._writes(mock_session_manager) == []
+
+    @pytest.mark.parametrize(
+        "answer,message",
+        [
+            ('{"status": false}', r"didn't accept the settings for wl0\.$"),
+            ('{"status": null, "errors": [{"description": "Invalid value"}]}', "didn't accept the settings for wl0: Invalid value"),
+        ],
+    )
+    def test_router_refusal_is_an_error(self, mock_session_manager: MagicMock, answer: str, message: str) -> None:
+        svc = self._router(mock_session_manager, answers={"/sysbus/NeMo/Intf/wl0:setWLANConfig": answer})
+        with pytest.raises(ValueError, match=message):
+            svc.set_network(ssid="Home2")
+        assert len(self._writes(mock_session_manager)) == 1  # stopped at the first access point
+
+    def test_guest_network(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager)
+        svc.set_guest_network(ssid="Friends")
+        security = {"KeyPassPhrase": "Guest-Password-1", "WEPKey": "", "ModeEnabled": "WPA2-WPA3-Personal"}
+        assert self._writes(mock_session_manager) == [
+            (
+                "/sysbus/NeMo/Intf/wlguest2:setWLANConfig",
+                {"parameters": {"mibs": {"wlanvap": {"wlguest2": {"SSID": "Friends", "Security": security}}}}},
+            )
+        ]
+
+    @pytest.mark.parametrize(
+        "kwargs,message",
+        [
+            ({}, "Nothing to change"),
+            ({"ssid": "Home"}, "guest Wi-Fi name must be different from the Wi-Fi name"),
+            ({"password": "Old-Password-1"}, "guest Wi-Fi password must be different from the Wi-Fi password"),
+            ({"password": "weak"}, "guest Wi-Fi password must be 12 to 63"),
+        ],
+    )
+    def test_guest_network_refuses(self, mock_session_manager: MagicMock, kwargs: dict, message: str) -> None:
+        svc = self._router(mock_session_manager)
+        with pytest.raises(ValueError, match=message):
+            svc.set_guest_network(**kwargs)
+        assert self._writes(mock_session_manager) == []
+
+    def test_no_guest_network(self, mock_session_manager: MagicMock) -> None:
+        lan = _wlan_mibs({"wl0": _WL0, "wl1": _WL1})
+        svc = self._router(mock_session_manager, lan=lan, answers={"/sysbus/NeMo/Intf/guest:getMIBs": lan})
+        with pytest.raises(ValueError, match="no guest Wi-Fi network"):
+            svc.set_guest_network(ssid="Friends")
 
 
 # ── WWAN ──────────────────────────────────────────────────────────────

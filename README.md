@@ -80,7 +80,7 @@ ibox --help
 ibox --version
 ```
 
-The CLI outputs pretty JSON but can still be piped to popular tools like `jq`.
+The CLI outputs pretty JSON but can still be piped to popular tools like `jq`. `ibox devices summary` and `ibox wifi summary` give a short overview of the devices and the Wi-Fi networks.
 
 Commands that change settings do what the matching switch or form in the web interface does. `ibox <group> --help` lists them, for example:
 
@@ -88,6 +88,8 @@ Commands that change settings do what the matching switch or form in the web int
 ibox firewall set-port-forwarding minecraft 192.168.1.20 25565 --protocol tcp
 ibox devices block AA:BB:CC:DD:EE:FF
 ibox mst set AA:BB:CC:DD:EE:FF --minutes-per-day 120 --allowed-time '{"Sat": 240, "Sun": 240}'
+ibox wifi set-network --ssid MyHome --password 'Correct-Horse-9'
+ibox dns set-device-servers 1.1.1.1,9.9.9.9
 ```
 
 To save all settings to a file and load them back later, like the web interface's "Save Current Configuration" and "Restore Configuration" buttons (the phone book isn't included, and a restore leaves it as it is):
@@ -99,7 +101,7 @@ ibox nmc restore internetbox.cfg
 
 `ibox nmc backup-to-swisscom` uploads the settings to Swisscom, as the web interface does when you save a change. It only works if backup to Swisscom is turned on for your router; the web interface has no setting for it. The upload runs in the background for about a minute, and `ibox nmc network-config` shows its status.
 
-`ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards) and `ibox wifi set-enabled false` cut connections, so they ask for confirmation first. Add `--yes` to skip the question in scripts.
+`ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), `ibox wifi set-enabled false`, `ibox wifi set-guest-enabled false`, `ibox wifi set-network` and `ibox wifi set-guest-network` cut connections, and `ibox voice clear-call-list` can't be undone, so they ask for confirmation first. Add `--yes` to skip the question in scripts.
 
 ### Library usage
 
@@ -111,6 +113,18 @@ with InternetBoxClient() as ibox:
     print(ibox.wifi.status())        # no auth required
     print(ibox.devices.topology())   # auth required
     print(ibox.vpn.status())         # auth required
+```
+
+For tools built on the library, e.g. an MCP server, each method is labelled with what it does to the router, and `hide_secrets()` replaces passwords and keys in a response. The library and the CLI show them.
+
+```python
+import json
+
+from internetbox_client.utils.helpers import hide_secrets
+from internetbox_client.utils.labels import action
+
+action(ibox.wifi.summary)                      # "read"; also "write" or "disruptive" (cuts connections)
+hide_secrets(json.loads(ibox.wifi.summary()))  # passwords and keys become "<hidden>"
 ```
 
 ## 📡 Running the Exporter

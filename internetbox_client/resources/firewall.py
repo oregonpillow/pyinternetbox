@@ -1,6 +1,7 @@
 from typing import Literal
 
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.labels import write
 
 _PROTOCOLS = {"tcp": "6", "udp": "17", "both": "6,17"}
 
@@ -8,11 +9,33 @@ _PROTOCOLS = {"tcp": "6", "udp": "17", "both": "6,17"}
 class Firewall(APIClient):
     """Firewall rules, DMZ, and port-forwarding settings."""
 
+    def status(self) -> str:
+        """Get firewall status, including whether UPnP port forwarding is on (UpnpPortForwardingEnable)"""
+        data = {"parameters": {}}
+        return self.post("/sysbus/Firewall:get", data)
+
+    @write
+    def set_upnp_enabled(self, enable: bool) -> str:
+        """Turn UPnP port forwarding on or off, like the UPnP switch in the web UI's port forwarding settings.
+
+        With UPnP on, devices such as game consoles open ports to the internet themselves.
+
+        Args:
+            enable (bool): True to turn UPnP on, False to turn it off.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"UpnpPortForwardingEnable": enable}}
+        return self.post("/sysbus/Firewall:set", data)
+
     def dmz(self) -> str:
         """Get DMZ status"""
         data = {"parameters": {}}
         return self.post("/sysbus/Firewall:getDMZ", data)
 
+    @write
     def set_dmz(self, destination_ip: str) -> str:
         """Expose a device to the internet (DMZ host).
 
@@ -29,6 +52,7 @@ class Firewall(APIClient):
         data = {"parameters": {"id": "webui", "sourceInterface": "data", "destinationIPAddress": destination_ip, "enable": True}}
         return self.post("/sysbus/Firewall:setDMZ", data)
 
+    @write
     def delete_dmz(self) -> str:
         """Remove the DMZ host set in the web UI or with set_dmz."""
         data = {"parameters": {"id": "webui"}}
@@ -39,6 +63,7 @@ class Firewall(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/Firewall:getFirewallLevel", data)
 
+    @write
     def set_level(self, level: Literal["Low", "Medium", "High", "Custom"]) -> str:
         """Set the IPv4 firewall level.
 
@@ -57,6 +82,7 @@ class Firewall(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/Firewall:getFirewallIPv6Level", data)
 
+    @write
     def set_ipv6_level(self, level: Literal["Off", "Medium", "High", "Custom"]) -> str:
         """Set the IPv6 firewall level.
 
@@ -75,6 +101,7 @@ class Firewall(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/Firewall:getPortForwarding", data)
 
+    @write
     def set_port_forwarding(
         self,
         name: str,
@@ -125,6 +152,7 @@ class Firewall(APIClient):
         self._commit()
         return result
 
+    @write
     def delete_port_forwarding(self, name: str) -> str:
         """Delete a port forwarding rule created in the web UI or with set_port_forwarding.
 

@@ -3,6 +3,7 @@ import re
 
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
+from internetbox_client.utils.labels import write
 
 WEEK = 7 * 86400  # schedule times are seconds since Monday 00:00
 _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -68,6 +69,7 @@ class Scheduler(APIClient):
         data = {"parameters": {"type": "ToD", "ID": normalize_mac(mac)}}
         return self.post("/sysbus/Scheduler:getSchedule", data)
 
+    @write
     def set_device_schedule(self, mac: str, blocked_periods: list, enable: bool = True) -> str:
         """Create or replace a device's internet access schedule (parental controls).
 
@@ -96,6 +98,7 @@ class Scheduler(APIClient):
         }
         return self.post("/sysbus/Scheduler:addSchedule", {"parameters": {"type": "ToD", "info": info}})
 
+    @write
     def enable_device_schedule(self, mac: str, enable: bool = True) -> str:
         """Turn a device's internet access schedule on or off, keeping its periods.
 
@@ -110,6 +113,7 @@ class Scheduler(APIClient):
         data = {"parameters": {"type": "ToD", "ID": normalize_mac(mac), "enable": enable}}
         return self.post("/sysbus/Scheduler:enableSchedule", data)
 
+    @write
     def remove_device_schedule(self, mac: str) -> str:
         """Delete a device's internet access schedule.
 

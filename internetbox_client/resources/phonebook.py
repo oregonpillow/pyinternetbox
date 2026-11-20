@@ -1,4 +1,5 @@
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.labels import write
 
 
 class Phonebook(APIClient):
@@ -14,6 +15,7 @@ class Phonebook(APIClient):
         data = {"parameters": {"uniqueID": id}}
         return self.post("/sysbus/Phonebook:getContactByUniqueID", data)
 
+    @write
     def add_contact(self, contact: dict) -> str:
         """Add a contact to the phonebook. Returns the contact's unique ID.
 
@@ -21,3 +23,35 @@ class Phonebook(APIClient):
         """
         data = {"parameters": {"contact": contact}}
         return self.post("/sysbus/Phonebook:addContactAndGenUUID", data)
+
+    @write
+    def modify_contact(self, id: str, contact: dict) -> str:
+        """Change a phonebook contact. Fields you leave out stay as they are.
+
+        e.g.: contact = {"name": "N:Hotline", "formattedName": "Hotline", "telephoneNumbers": [ { "name": "0800800800", "type": "WORK", "preferred": False } ]}
+
+        Args:
+            id (str): the contact's uniqueID, as listed by all_contacts().
+            contact (dict): the fields to change, in the format of add_contact(). telephoneNumbers replaces all the
+                contact's numbers.
+
+        Returns:
+            str: response content: status true, or false if no contact has this ID.
+
+        """
+        data = {"parameters": {"uniqueID": id, "contact": contact}}
+        return self.post("/sysbus/Phonebook:modifyContactByUniqueID", data)
+
+    @write
+    def delete_contact(self, id: str) -> str:
+        """Delete a phonebook contact.
+
+        Args:
+            id (str): the contact's uniqueID, as listed by all_contacts().
+
+        Returns:
+            str: response content: status true, or false if no contact has this ID.
+
+        """
+        data = {"parameters": {"uniqueID": id}}
+        return self.post("/sysbus/Phonebook:removeContactByUniqueID", data)

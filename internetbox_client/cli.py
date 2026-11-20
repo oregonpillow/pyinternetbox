@@ -90,21 +90,12 @@ def _friendly_errors() -> Iterator[None]:
         _fail(f"{_hostname} accepted the connection but did not answer in time.", hint=True)
     except requests.exceptions.ConnectionError as exc:
         _fail(f"Could not connect to {_hostname}: {exc}", hint=True)
-    except requests.exceptions.HTTPError as exc:
-        _fail(f"The router rejected the request: {exc}{_router_errors(exc.response)}")
+    except requests.exceptions.HTTPError as exc:  # the message ends with the router's reasons, if it gave any
+        _fail(f"The router rejected the request: {exc}")
     except ValueError as exc:  # invalid input caught by a resource method, e.g. a malformed MAC address
         _fail(str(exc))
     except OSError as exc:  # a file that can't be read, e.g. a mistyped backup file name
         _fail(str(exc))
-
-
-def _router_errors(response: requests.Response | None) -> str:
-    """The router's reasons from an error response, e.g. "Invalid port-range (InternalPort, ExternalPort)", as an extra line."""
-    try:
-        reasons = "; ".join(f"{error.get('description')} ({error.get('info')})" for error in response.json()["errors"])
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return ""
-    return f"\nRouter says: {reasons}" if reasons else ""
 
 
 def _fail(message: str, hint: bool = False) -> NoReturn:
@@ -127,6 +118,16 @@ _CONFIRM = {
         "Turn off all Wi-Fi networks? Every wireless device will lose its connection, including this computer if it's on Wi-Fi.",
         lambda args: not args["enable"],
     ),
+    ("wifi", "set_network"): (
+        "Change the Wi-Fi settings? Wireless devices lose their connection and must reconnect, with the new password if it changed.",
+        lambda args: True,
+    ),
+    ("wifi", "set_guest_network"): (
+        "Change the guest Wi-Fi settings? Devices on the guest network must reconnect, with the new password if it changed.",
+        lambda args: True,
+    ),
+    ("wifi", "set_guest_enabled"): ("Turn off the guest Wi-Fi? Devices on it will lose their connection.", lambda args: not args["enable"]),
+    ("voice", "clear_call_list"): ("Delete all calls from the call list? They can't be brought back.", lambda args: True),
 }
 
 

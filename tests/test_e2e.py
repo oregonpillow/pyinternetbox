@@ -16,13 +16,13 @@ To also run destructive tests (write to the router)::
     uv run pytest tests/test_e2e.py -m destructive -v
 
 Tests that change settings are marked ``@pytest.mark.destructive``. They leave the configuration as they found it:
-they write the current value back (LED brightness, Wi-Fi TX power, firewall levels), or create something
-temporary and delete it again (a disabled port forwarding rule named ``DUMMY_RULE``, and a device entry, IP address
-reservation, schedule and time limit for ``FAKE_MAC``, which no real device uses). They skip rather than touch
-existing settings, e.g. a DMZ host.
+they write the current value back (LED brightness, Wi-Fi TX power, firewall levels, UPnP, WPS, DNS servers for
+devices), or create something temporary and delete it again (a disabled port forwarding rule and a phone book contact
+named ``DUMMY_RULE``, and a device entry, IP address reservation, schedule and time limit for ``FAKE_MAC``, which no
+real device uses). They skip rather than touch existing settings, e.g. a DMZ host or calls in the call list.
 
-Tests that interrupt the network for everyone, such as turning Wi-Fi off and on, are also marked
-``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is set.
+Tests that interrupt the network for everyone, such as turning Wi-Fi off and on or writing the Wi-Fi names back, are
+also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is set.
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ from internetbox_client.utils.APIClient import SessionManager
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 # Write tests give this locally administered MAC address, which no real device uses, a device entry, IP address
-# reservation, schedule and time limit, and name their port forwarding rule DUMMY_RULE, so existing settings are never
-# modified.
+# reservation, schedule and time limit, and name their port forwarding rule and phone book contact DUMMY_RULE, so
+# existing settings are never modified.
 FAKE_MAC = "02:00:00:00:00:01"
 DUMMY_RULE = "pyinternetbox-e2e"
 
@@ -199,6 +199,20 @@ def _runner_is_wired(sm) -> bool:
     return bool(me) and me.get("InterfaceName", "").lower().startswith("eth") and "wifi" not in (me.get("Tags") or "").split()
 
 
+def _wifi_networks(wifi) -> tuple[dict, dict]:
+    """What set_network() and set_guest_network() can change: the access points' and the mesh networks' settings."""
+    main, guest = wifi._access_points()
+    access_points = {
+        name: (ap["SSID"], ap.get("SSIDAdvertisementEnabled"), ap["Security"]["KeyPassPhrase"], ap["Security"]["ModeEnabled"])
+        for name, ap in {**main, **guest}.items()
+    }
+    mesh = {
+        name: (entry["SSID"], entry["SSIDAdvertisementEnabled"], entry.get("PassPhrase"), entry["PersistentEnable"])
+        for name, entry in json.loads(wifi.ssid())["status"].items()
+    }
+    return access_points, mesh
+
+
 # ── APServices ────────────────────────────────────────────────────────────────
 
 
@@ -264,6 +278,10 @@ class TestE2EDECT:
     def test_dspg(self, svc):
         _ok(svc.dspg())
 
+    def test_ringtone(self, svc):
+        with _skip_if_unavailable():
+            _ok(svc.ringtone())
+
 
 # ── Devices ───────────────────────────────────────────────────────────────────
 
@@ -284,6 +302,15 @@ class TestE2EDevices:
 
     def test_topology(self, svc):
         _ok(svc.topology())
+
+    def test_summary(self, svc, sm):
+        summary = {device["mac"]: device for device in json.loads(svc.summary())}
+        devices = {device["Key"]: device for device in _lan_devices(sm)}
+        assert summary.keys() == devices.keys()
+        for mac, device in devices.items():
+            assert (summary[mac]["name"], summary[mac]["ip"]) == (device.get("Name"), device.get("IPAddress") or None)
+        # Devices can connect or leave between the two calls, but this computer stays connected.
+        assert any(device["connected"] and device["connection"] for device in summary.values())
 
     def test_network_xt(self, svc):
         _ok(svc.network_xt())
@@ -395,6 +422,25 @@ class TestE2EDNS:
 
     def test_cache(self, svc):
         _ok(svc.cache())
+
+    @pytest.mark.destructive
+    def test_set_device_servers_reverts(self, svc):
+        """Write the DNS servers devices get back: effective no-op."""
+
+        def servers():
+            return [
+                [ipaddress.ip_address(server) for server in json.loads(raw)["status"]["DNSServers"].split(",") if server]
+                for raw in (svc.user(), svc.user_ipv6())
+            ]
+
+        v4, v6 = servers()
+        assert _no_errors(svc.set_device_servers([str(server) for server in v4]))["status"] is True
+        assert _no_errors(svc.set_device_servers_ipv6([str(server) for server in v6]))["status"] is True
+        assert servers() == [v4, v6]
+
+    @pytest.mark.destructive
+    def test_flush_cache(self, svc):
+        _no_errors(svc.flush_cache())
 
 
 # ── DynDNS ────────────────────────────────────────────────────────────────────
@@ -535,6 +581,16 @@ class TestE2EFirewall:
         finally:
             svc.delete_dmz()
         assert json.loads(svc.dmz())["status"] == {}
+
+    def test_status(self, svc):
+        _ok(svc.status())
+
+    @pytest.mark.destructive
+    def test_set_upnp_enabled_reverts(self, svc):
+        """Write the current UPnP setting back: effective no-op."""
+        enabled = _payload(svc.status())["UpnpPortForwardingEnable"]
+        assert _no_errors(svc.set_upnp_enabled(enabled))["status"] is True
+        assert _payload(svc.status())["UpnpPortForwardingEnable"] is enabled
 
 
 # ── GenLog ────────────────────────────────────────────────────────────────────
@@ -744,6 +800,34 @@ class TestE2EPhonebook:
     def test_all_contacts(self, svc):
         _ok(svc.all_contacts())
 
+    @pytest.mark.destructive
+    def test_contact_add_modify_delete(self, svc):
+        """Add a contact named DUMMY_RULE, change it and delete it, leaving the other contacts untouched."""
+
+        def contacts():
+            return sorted(json.dumps(contact, sort_keys=True) for contact in json.loads(svc.all_contacts())["status"])
+
+        before = contacts()
+        if any(f'"formattedName": "{DUMMY_RULE}' in contact for contact in before):
+            pytest.skip(f"A contact named {DUMMY_RULE} exists")
+        home = {"name": "0000000000", "type": "HOME", "preferred": False}
+        contact = {"name": f"N:{DUMMY_RULE}", "formattedName": DUMMY_RULE, "title": "e2e", "telephoneNumbers": [home]}
+        contact_id = _no_errors(svc.add_contact(contact))["status"]
+        try:
+            cell = {"name": "0000000001", "type": "CELL", "preferred": False}
+            changes = {"formattedName": f"{DUMMY_RULE} 2", "telephoneNumbers": [cell]}
+            assert _no_errors(svc.modify_contact(contact_id, changes))["status"] is True
+            stored = json.loads(svc.get_contact(contact_id))["status"]
+            assert (stored["formattedName"], stored["title"]) == (f"{DUMMY_RULE} 2", "e2e")  # fields left out stay
+            assert [(number["name"], number["type"]) for number in stored["telephoneNumbers"]] == [("0000000001", "CELL")]
+            assert _no_errors(svc.delete_contact(contact_id))["status"] is True
+        finally:
+            if json.loads(svc.get_contact(contact_id))["status"]:
+                svc.delete_contact(contact_id)
+        assert json.loads(svc.delete_contact(contact_id))["status"] is False
+        assert json.loads(svc.modify_contact(contact_id, {"formattedName": DUMMY_RULE}))["status"] is False
+        assert contacts() == before
+
 
 # ── PowerManagement ───────────────────────────────────────────────────────────
 
@@ -792,9 +876,8 @@ class TestE2ESecurity:
     def svc(self, sm):
         return _make(Security, sm)
 
-    def test_gateway_status(self, svc):
-        with _skip_if_unavailable():
-            _ok(svc.gateway_status())
+    def test_home_security_status(self, svc):
+        assert "PackageStatus" in _payload(svc.home_security_status())
 
     def test_user_exposure_status(self, svc):
         with _skip_if_unavailable():
@@ -960,6 +1043,16 @@ class TestE2EVoice:
     def test_call_list(self, svc):
         _ok(svc.call_list())
 
+    @pytest.mark.destructive
+    def test_clear_empty_call_list(self, svc):
+        """Clear the call list while it's empty: no-op. Skipped if it has calls."""
+        if json.loads(svc.call_list())["status"]:
+            pytest.skip("The call list has calls; not deleting them")
+        with pytest.raises(requests.HTTPError):  # no call has this ID
+            svc.delete_call("0")
+        _no_errors(svc.clear_call_list())
+        assert json.loads(svc.call_list())["status"] == []
+
 
 # ── VPN ───────────────────────────────────────────────────────────────────────
 
@@ -1002,6 +1095,16 @@ class TestE2EWifi:
 
     def test_status(self, svc):
         _ok(svc.status())
+
+    def test_summary(self, svc):
+        summary = json.loads(svc.summary())
+        access_points, _ = _wifi_networks(svc)
+        assert sorted((n["ssid"], n["visible"], n["password"], n["encryption"]) for n in summary["networks"]) == sorted(
+            access_points.values()
+        )
+        assert {n["band"] for n in summary["networks"]} <= {"2.4GHz", "5GHz", "6GHz"}
+        assert all(isinstance(n["channel"], int) and isinstance(n["connected_devices"], int) for n in summary["networks"])
+        assert summary["wps"] == _payload(svc.status())["WPSEnable"]
 
     def test_steering(self, svc):
         _ok(svc.steering())
@@ -1126,6 +1229,50 @@ class TestE2EWifi:
                 svc.set_guest_enabled(True)
         assert _payload(svc.status())["Enable"] is True
         assert _payload(svc.guest())["Enable"] is guest_on
+
+    @pytest.mark.destructive
+    def test_set_wps_enabled_reverts(self, svc):
+        """Write the current WPS setting back: effective no-op."""
+        enabled = _payload(svc.status())["WPSEnable"]
+        _no_errors(svc.set_wps_enabled(enabled))
+        assert _payload(svc.status())["WPSEnable"] is enabled
+
+    @pytest.mark.destructive
+    def test_wps_pairing_start_stop(self, svc):
+        """Start WPS pairing and stop it straight away. Skipped if WPS is off."""
+        if not _payload(svc.status())["WPSEnable"]:
+            pytest.skip("WPS is off; not turning it on")
+        try:
+            _no_errors(svc.start_wps_pairing())
+        finally:
+            _no_errors(svc.stop_wps_pairing())
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_network_reverts(self, svc, sm):
+        """Write each band's name and visibility back: wireless devices reconnect meanwhile."""
+        if not _runner_is_wired(sm):
+            pytest.skip("This machine isn't wired to the router, so it would lose its connection")
+        before = _wifi_networks(svc)
+        main, _ = svc._access_points()
+        if _payload(svc.status()).get("ConfigurationMode"):
+            changes = [{"band": None, **next(iter(main.values()))}]
+        else:
+            changes = [{**ap, "band": ap["Band"]} for ap in main.values() if ap["Band"] in ("2.4GHz", "5GHz")]
+        for ap in changes:
+            _no_errors(svc.set_network(ssid=ap["SSID"], visible=ap["SSIDAdvertisementEnabled"], band=ap["band"]))
+        assert _wifi_networks(svc) == before
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_guest_network_reverts(self, svc):
+        """Write the guest network's name back: its devices reconnect meanwhile. It stays on or off."""
+        _, guest = svc._access_points()
+        if len({ap["SSID"] for ap in guest.values()}) != 1:
+            pytest.skip("No guest network, or one with a different name per band")
+        before, guest_on = _wifi_networks(svc), _payload(svc.guest())["Enable"]
+        _no_errors(svc.set_guest_network(ssid=next(iter(guest.values()))["SSID"]))
+        assert (_wifi_networks(svc), _payload(svc.guest())["Enable"]) == (before, guest_on)
 
 
 # ── Wireguard ─────────────────────────────────────────────────────────────────

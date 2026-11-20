@@ -7,6 +7,7 @@ from internetbox_client.resources.mst import MST, _mst_id
 from internetbox_client.resources.scheduler import WEEK, Scheduler
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
+from internetbox_client.utils.labels import write
 
 
 def _device_key(key: str) -> str:
@@ -19,6 +20,34 @@ def _device_key(key: str) -> str:
 
 def _has_time_limit(mst: MST, mac: str) -> bool:
     return _mst_id(mac) in (json.loads(mst.get()).get("data") or {}).get("ids", [])
+
+
+def _connection(device: dict) -> str | None:
+    """How a device connects, or last connected, e.g. "Ethernet (ETH4)", "Wi-Fi 5GHz" or "guest Wi-Fi 2.4GHz"."""
+    interface = device.get("InterfaceName") or ""
+    if interface.upper().startswith("ETH"):
+        return f"Ethernet ({interface})"
+    if interface.lower().startswith("wl"):
+        network = "guest Wi-Fi" if "guest" in interface.lower() else "Wi-Fi"
+        band = device.get("OperatingFrequencyBand")
+        return f"{network} {band}" if band else network
+    return interface or None
+
+
+def _device_summary(device: dict) -> dict:
+    summary = {
+        "name": device.get("Name"),
+        "mac": device.get("Key"),
+        "ip": device.get("IPAddress") or None,
+        "type": device.get("DeviceType") or None,
+        "manufacturer": device.get("Manufacturer") or device.get("MACVendor") or None,
+        "connected": bool(device.get("Active")),
+        "connection": _connection(device),
+        "last_connection": device.get("LastConnection"),
+    }
+    if summary["connected"] and "Wi-Fi" in (summary["connection"] or "") and device.get("SignalStrength"):
+        summary["signal_dbm"] = device["SignalStrength"]
+    return summary
 
 
 class Devices(APIClient):
@@ -58,6 +87,20 @@ class Devices(APIClient):
         data = {"service": "Devices", "method": "get", "parameters": {"expression": expression, "flags": flags}}
         return self.post("/ws", data=data)
 
+    def summary(self) -> str:
+        """A short list of the devices on the home network: name, addresses, type, and whether and how they're connected.
+
+        A short version of get(): 5 KB instead of 130 KB for 25 devices, with the manufacturer and the last connection
+        time too. The connection is the current or last one, e.g. "Ethernet (ETH4)" or "Wi-Fi 5GHz". Connected Wi-Fi
+        devices also have their signal strength in dBm.
+
+        Returns:
+            str: a JSON list, e.g. [{"name": "iPhone", "mac": "AA:BB:CC:DD:EE:FF", "ip": "192.168.1.20", ...}]
+
+        """
+        devices = json.loads(self.get(expression="lan and not self"))["status"]
+        return json.dumps([_device_summary(device) for device in devices], ensure_ascii=False)
+
     def usb(self) -> str:
         """USB information."""
         data = {"parameters": {}}
@@ -85,6 +128,7 @@ class Devices(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/DeviceInfo/MemoryStatus:get", data)
 
+    @write
     def rename(self, key: str, name: str) -> str:
         """Rename a device, as shown in the web UI and in get(). The new name shows up within a second or so.
 
@@ -99,6 +143,7 @@ class Devices(APIClient):
         data = {"service": f"Devices.Device.{_device_key(key)}", "method": "set", "parameters": {"parameters": {"Name": name}}}
         return self.post("/ws", data)
 
+    @write
     def remove(self, mac: str) -> str:
         """Remove an offline device from the device list, like the delete button in the web UI.
 
@@ -130,6 +175,7 @@ class Devices(APIClient):
         data = {"service": "Devices", "method": "destroyDevice", "parameters": {"key": mac}}
         return self.post("/ws", data)
 
+    @write
     def wake_on_lan(self, mac: str) -> str:
         """Wake up a device with Wake-on-LAN. The device must support it and have it turned on.
 
@@ -143,6 +189,7 @@ class Devices(APIClient):
         data = {"parameters": {"hostID": normalize_mac(mac), "broadcast": True, "retries": 3, "interval": 60000}}
         return self.post("/sysbus/WOL:sendWakeOnLan", data)
 
+    @write
     def block(self, mac: str) -> str:
         """Block a device's internet access, like the web UI's "Internet access blocked" switch.
 
@@ -159,6 +206,7 @@ class Devices(APIClient):
         """
         return self._set_parental_controls(mac, True)
 
+    @write
     def unblock(self, mac: str) -> str:
         """Restore a device's internet access, like turning off the web UI's "Internet access blocked" switch.
 

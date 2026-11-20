@@ -189,13 +189,13 @@ if a method from Livebox doesn't work on internetbox mark it with "⚠️" and a
 
 ---
 
-## `LmVoipApi` → `voice.py` / `dect.py` / `phonebook.py` — Write + some read operations missing
+## `LmVoipApi` → `voice.py` / `dect.py` / `phonebook.py` — Ring and DECT repeater status missing
 
-- [ ] `delete_call(call_id)` → `VoiceService.VoiceApplication:clearCallList`
+- [x] `delete_call(call_id)` → `VoiceService.VoiceApplication:clearCallList`
 - [x] `get_contact(id)` → `Phonebook:getContactByUniqueID`
 - [x] `add_contact(contact)` → `Phonebook:addContactAndGenUUID`
-- [ ] `change_contact(id, contact)` → `Phonebook:modifyContactByUniqueID`
-- [ ] `delete_contact(id)` → `Phonebook:removeContactByUniqueID` / `removeAllContacts`
+- [x] `change_contact(id, contact)` → `Phonebook:modifyContactByUniqueID`
+- [x] `delete_contact(id)` → `Phonebook:removeContactByUniqueID` / `removeAllContacts`
 - [ ] ⚠️ **won't work on internetbox4** `ring(ringtone)` → `VoiceService.VoiceApplication:ring`
 - [x] `get_dect_name()` → `DECT:getName`
 - [x] `get_dect_catiq_version()` → `DECT:getStandardVersion`
@@ -205,13 +205,15 @@ if a method from Livebox doesn't work on internetbox mark it with "⚠️" and a
 
 
 > Read operations `trunks()`, `call_list()`, `all_contacts()`, DECT `rfpi/pin/version` are covered.
+>
+> `change_contact()` is `phonebook.py:modify_contact()`. `delete_contact()` deletes one contact (`removeAllContacts` isn't implemented), and `voice.py:clear_call_list()` deletes all calls.
 
 ---
 
 ## `LmWifiApi` → `wifi.py` — Write + advanced config missing
 
-- [ ] `set_enable(enable)` → `NMC.Wifi:set` + `PowerManagement:setProfiles`
-- [ ] `set_guest_enable(enable, timer)` → `NMC.Guest:set`
+- [x] `set_enable(enable)` → `NMC.Wifi:set` + `PowerManagement:setProfiles`
+- [x] `set_guest_enable(enable, timer)` → `NMC.Guest:set`
 - [ ] `set_guest_activation_timer(timer)` → `NMC.WlanTimer:setActivationTimer`
 - [ ] `disable_guest_activation_timer()` → `NMC.WlanTimer:disableActivationTimer`
 - [ ] `set_configuration_mode(mode)` → `NMC.Wifi:set` (ConfigurationMode)
@@ -219,12 +221,14 @@ if a method from Livebox doesn't work on internetbox mark it with "⚠️" and a
 - [ ] `get_mlo_config()` → `SSW.DataElements.Network.APMLDTemplate.privMlo:get`
 - [ ] `get_mlo_enable()` → Derived from `get_mlo_config()`
 - [ ] `set_mlo_enable(enable)` → `SSW.DataElements.Network.APMLDTemplate.privMlo:set`
-- [ ] `set_config(old, new)` → `NeMo.Intf.lan:setWLANConfig` (full SSID diff/apply)
-- [ ] `set_guest_config(old, new)` → `NeMo.Intf.lan:setWLANConfig` (guest SSID diff/apply)
+- [x] `set_config(old, new)` → `NeMo.Intf.lan:setWLANConfig` (full SSID diff/apply)
+- [x] `set_guest_config(old, new)` → `NeMo.Intf.lan:setWLANConfig` (guest SSID diff/apply)
 - [ ] `get_global_wifi_status(...)` → Composite status map across all radios
 - [ ] `set_wlan_config(mibs)` → `NeMo.Intf.lan:setWLANConfig`
 
 > Read operations `status()`, `guest()`, `activation_timer()`, `complete_schedules()`, `power_management_profiles()` are covered.
+>
+> `set_enable()` is `wifi.py:set_enabled()` (`NMC.Wifi:set` only, like the web UI), and `set_guest_enable()` is `wifi.py:set_guest_enabled()`, which also sets the guest timer when turning the guest network on. `set_config()` and `set_guest_config()` are `wifi.py:set_network()` and `wifi.py:set_guest_network()`: name, password and visibility, through `NeMo.Intf.{access point}:setWLANConfig` like the web UI. `wifi.py` also has WPS: `set_wps_enabled()`, `start_wps_pairing()` and `stop_wps_pairing()`.
 
 ---
 
@@ -245,5 +249,5 @@ if a method from Livebox doesn't work on internetbox mark it with "⚠️" and a
 | `LmScreenApi` | Partial — screen password methods missing |
 | `LmStatsApi` | **Not implemented** |
 | `LmTvDecoderApi` | **Not implemented** (external TV decoder control) |
-| `LmVoipApi` | Partial — phonebook write, DECT read, ring missing |
-| `LmWifiApi` | Partial — all write/set ops missing |
+| `LmVoipApi` | Partial — ring and DECT repeater status missing (neither is on the internetbox4) |
+| `LmWifiApi` | Partial — guest timer, configuration mode, scheduler and MLO ops missing |

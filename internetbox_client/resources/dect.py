@@ -1,4 +1,5 @@
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.labels import secret_result
 
 
 class DECT(APIClient):
@@ -19,6 +20,7 @@ class DECT(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/DECT:getRFPI", data)
 
+    @secret_result
     def pin(self) -> str:
         """Get DECT PIN"""
         data = {"parameters": {}}
@@ -55,6 +57,6 @@ class DECT(APIClient):
         return self.post("/sysbus/DECT:getName", data)
 
     def ringtone(self) -> str:
-        """Get DECT ringtone"""
+        """Get DECT ringtone. Not on the Internet Box 4 (HTTP 404)."""
         data = {"parameters": {}}
-        return self.post("/sysbus/VoiceService.VoiceApplication:getRingtone", data)
+        return self.post("/sysbus/VoiceService/VoiceApplication:getRingtone", data)

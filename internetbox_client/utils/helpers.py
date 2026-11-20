@@ -1,4 +1,33 @@
 import re
+from typing import Any
+
+HIDDEN = "<hidden>"
+
+# Keys of secrets, e.g. KeyPassPhrase, RadiusSecret, IPsecPreSharedKey, authPassword or SelfPIN. Keys with spaces or
+# dashes aren't matched: they are text, e.g. in the web UI's translations.
+_SECRET_KEY = re.compile(r"\w*(password|passphrase|secret|presharedkey|psk|privatekey|wepkey|r0khkey|pin|puk|token)", re.IGNORECASE)
+
+
+def hide_secrets(data: Any) -> Any:
+    """Return a copy of a decoded response with passwords, keys and other secrets replaced by "<hidden>".
+
+    Secrets are recognised by their key, e.g. KeyPassPhrase (Wi-Fi), password (DynDNS) or PreSharedKey (WireGuard).
+    Empty values stay, so it's still visible that none is set, and so do booleans such as UseSyncToken. A method whose
+    whole result is a secret, e.g. dect.pin(), is labelled instead: see labels.has_secret_result().
+
+    The library and the CLI show secrets. This is for output that shouldn't, e.g. an MCP server's.
+    """
+    if isinstance(data, dict):
+        return {key: HIDDEN if _is_secret(key, value) else hide_secrets(value) for key, value in data.items()}
+    if isinstance(data, list):
+        return [hide_secrets(value) for value in data]
+    return data
+
+
+def _is_secret(key: object, value: object) -> bool:
+    if not isinstance(key, str) or not _SECRET_KEY.fullmatch(key) or isinstance(value, bool):
+        return False
+    return value not in (None, "", [], {})
 
 
 def camel(s: str) -> str:

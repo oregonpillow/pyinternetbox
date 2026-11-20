@@ -2,7 +2,71 @@
 
 import pytest
 
-from internetbox_client.utils.helpers import camel, normalize_mac
+from internetbox_client.utils.helpers import camel, hide_secrets, normalize_mac
+
+
+class TestHideSecrets:
+    def test_wifi_settings(self) -> None:
+        mibs = {
+            "status": {
+                "wlanvap": {
+                    "wl0": {
+                        "SSID": "MyHome",
+                        "Security": {"KeyPassPhrase": "Correct-Horse-9", "PreSharedKey": "", "SAEPassphrase": "Correct-Horse-9"},
+                        "R0KHKey": "0123456789abcdef",
+                        "RadiusSecret": "",
+                    }
+                }
+            }
+        }
+        assert hide_secrets(mibs) == {
+            "status": {
+                "wlanvap": {
+                    "wl0": {
+                        "SSID": "MyHome",
+                        "Security": {"KeyPassPhrase": "<hidden>", "PreSharedKey": "", "SAEPassphrase": "<hidden>"},
+                        "R0KHKey": "<hidden>",
+                        "RadiusSecret": "",
+                    }
+                }
+            }
+        }
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "password",
+            "Password",
+            "authPassword",
+            "PassPhrase",
+            "IPsecPreSharedKey",
+            "IPsecConfigurationIKEv2PSK",
+            "WEPKey",
+            "SelfPIN",
+            "SyncToken",
+        ],
+    )
+    def test_secret_keys(self, key: str) -> None:
+        assert hide_secrets([{key: "s3cret"}, {key: 1234}]) == [{key: "<hidden>"}, {key: "<hidden>"}]
+
+    @pytest.mark.parametrize(
+        "key", ["PublicKey", "Key", "PasswordRecovery", "PinholeNumberOfEntries", "UserName", "Show Password", "set-password"]
+    )
+    def test_other_keys(self, key: str) -> None:
+        assert hide_secrets({key: "visible"}) == {key: "visible"}
+
+    def test_booleans_and_empty_values_stay(self) -> None:
+        data = {"UseSyncToken": True, "RequireSharedSecret": False, "Password": None, "PIN": "", "PreSharedKey": []}
+        assert hide_secrets(data) == data
+
+    def test_returns_a_copy(self) -> None:
+        data = {"status": {"password": "s3cret"}}
+        hide_secrets(data)
+        assert data == {"status": {"password": "s3cret"}}
+
+    @pytest.mark.parametrize("value", ["text", 1, None, True])
+    def test_other_values(self, value: object) -> None:
+        assert hide_secrets(value) == value
 
 
 class TestNormalizeMac:

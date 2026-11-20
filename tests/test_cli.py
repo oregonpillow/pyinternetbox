@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import operator
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
@@ -12,16 +13,22 @@ import requests
 from typer.testing import CliRunner
 
 from internetbox_client import InternetBoxClient, cli
+from internetbox_client.utils.labels import action
 
 runner = CliRunner()
 
 _COMMANDS = [
     ("wifi", "set_enabled"),
+    ("wifi", "set_guest_enabled"),
+    ("wifi", "set_network"),
+    ("wifi", "set_guest_network"),
     ("mst", "set"),
     ("firewall", "set_port_forwarding"),
     ("scheduler", "set_device_schedule"),
     ("nmc", "reboot"),
     ("nmc", "restore"),
+    ("voice", "clear_call_list"),
+    ("dns", "set_device_servers"),
 ]
 
 
@@ -111,6 +118,12 @@ def test_list_argument_from_json(client: MagicMock) -> None:
     assert client.scheduler.set_device_schedule.call_args.kwargs["blocked_periods"] == [{"begin": "Mon 22:00", "end": "Tue 07:00"}]
 
 
+@pytest.mark.parametrize("value,expected", [("1.1.1.1,9.9.9.9", ["1.1.1.1", "9.9.9.9"]), ("", [])])
+def test_list_argument_comma_separated_or_empty(client: MagicMock, value: str, expected: list) -> None:
+    assert runner.invoke(cli.app, ["dns", "set-device-servers", value]).exit_code == 0
+    client.dns.set_device_servers.assert_called_once_with(servers=expected)
+
+
 def test_invalid_json_is_a_usage_error(client: MagicMock) -> None:
     result = runner.invoke(cli.app, ["mst", "set", "aa:bb:cc:dd:ee:ff", "--allowed-time", "{bad"])
     assert result.exit_code == 2
@@ -142,15 +155,12 @@ def test_text_is_printed_as_it_is(client: MagicMock) -> None:
     assert result.stdout == "QUJD\nRUZH\n"
 
 
-def _http_error(body: bytes) -> requests.HTTPError:
+def test_router_errors_are_shown(client: MagicMock) -> None:
+    """The library adds the router's reasons to the message (see test_api_client)."""
     response = requests.Response()
-    response.status_code, response._content = 500, body
-    return requests.HTTPError("500 Server Error: Internal Server Error", response=response)
-
-
-def test_router_error_reasons_are_shown(client: MagicMock) -> None:
-    client.firewall.set_port_forwarding.side_effect = _http_error(
-        b'{"status": null, "errors": [{"error": 1114117, "description": "Invalid port-range", "info": "InternalPort, ExternalPort"}]}'
+    response.status_code = 500
+    client.firewall.set_port_forwarding.side_effect = requests.HTTPError(
+        "500 Server Error: Internal Server Error\nRouter says: Invalid port-range (InternalPort, ExternalPort)", response=response
     )
     result = runner.invoke(cli.app, ["firewall", "set-port-forwarding", "mc", "192.168.1.5", "25565"])
     assert result.exit_code == 1
@@ -158,20 +168,26 @@ def test_router_error_reasons_are_shown(client: MagicMock) -> None:
     assert "Router says: Invalid port-range (InternalPort, ExternalPort)" in result.output
 
 
-@pytest.mark.parametrize("body", [b"<html>Internal error</html>", b'{"status": null}', b'{"errors": []}'])
-def test_router_error_without_reasons(client: MagicMock, body: bytes) -> None:
-    client.firewall.set_port_forwarding.side_effect = _http_error(body)
-    result = runner.invoke(cli.app, ["firewall", "set-port-forwarding", "mc", "192.168.1.5", "25565"])
-    assert result.exit_code == 1
-    assert "The router rejected the request: 500 Server Error" in result.output
-    assert "Router says" not in result.output
-
-
 # Commands that ask for confirmation: CLI arguments, the question, and the call they make.
 _CONFIRMED = [
     (["nmc", "reboot", "--reason", "maintenance"], "Restart the router?", "nmc.reboot", {"reason": "maintenance"}),
     (["nmc", "restore", "internetbox.cfg"], "Replace all settings with this backup?", "nmc.restore", {"path": "internetbox.cfg"}),
     (["wifi", "set-enabled", "false"], "Turn off all Wi-Fi networks?", "wifi.set_enabled", {"enable": False}),
+    (["wifi", "set-guest-enabled", "false"], "Turn off the guest Wi-Fi?", "wifi.set_guest_enabled", {"enable": False, "hours": 0}),
+    (
+        ["wifi", "set-network", "--ssid", "Home", "--no-visible", "--band", "5GHz"],
+        "Change the Wi-Fi settings?",
+        "wifi.set_network",
+        {"ssid": "Home", "password": None, "visible": False, "band": "5GHz"},
+    ),
+    # The command's own --password, not the router password option of the same name.
+    (
+        ["wifi", "set-guest-network", "--password", "Guest-Password-1"],
+        "Change the guest Wi-Fi settings?",
+        "wifi.set_guest_network",
+        {"ssid": None, "password": "Guest-Password-1"},
+    ),
+    (["voice", "clear-call-list"], "Delete all calls from the call list?", "voice.clear_call_list", {}),
 ]
 
 
@@ -202,8 +218,25 @@ def test_yes_skips_question(client: MagicMock, args: list[str], question: str, m
     operator.attrgetter(method)(client).assert_called_once_with(**kwargs)
 
 
-def test_turning_wifi_on_doesnt_ask(client: MagicMock) -> None:
-    result = runner.invoke(cli.app, ["wifi", "set-enabled", "true"])
+@pytest.mark.parametrize(
+    ("args", "method"), [(["wifi", "set-enabled", "true"], "set_enabled"), (["wifi", "set-guest-enabled", "true"], "set_guest_enabled")]
+)
+def test_turning_wifi_on_doesnt_ask(client: MagicMock, args: list[str], method: str) -> None:
+    result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
     assert "Turn off" not in result.output
-    client.wifi.set_enabled.assert_called_once_with(enable=True)
+    getattr(client.wifi, method).assert_called_once()
+
+
+def test_disruptive_commands_ask_first() -> None:
+    """Every method labelled disruptive has a confirmation question, at least for its disruptive arguments."""
+    client = InternetBoxClient(hostname="192.0.2.1", ssl_verify=False)
+    disruptive = {
+        (group, name)
+        for group, resource in vars(client).items()
+        if not group.startswith("_")
+        for name, method in inspect.getmembers(resource, inspect.ismethod)
+        if action(method) == "disruptive"
+    }
+    assert disruptive
+    assert disruptive <= set(cli._CONFIRM)

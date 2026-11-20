@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -262,6 +265,159 @@ class TestSessionManagerFileTransfer:
         sm.session.send.return_value.status_code = 500
         with pytest.raises(requests.HTTPError):
             transfer(sm)
+
+
+def _response(status: int, body: bytes = b"{}") -> requests.Response:
+    response = requests.Response()
+    response.status_code, response._content, response.encoding = status, body, "utf-8"
+    return response
+
+
+_LOGOUT = _response(200, b'{"status": 0}')
+_REFUSED = _response(401, b'{"status": null, "errors": [{"error": 13, "description": "Permission denied", "info": "DNS"}]}')
+
+
+def _login_response(context_id: str) -> requests.Response:
+    return _response(200, f'{{"data": {{"contextID": "{context_id}"}}}}'.encode())
+
+
+class TestSessionManagerLoginAgain:
+    """The router answers HTTP 401 once a session has ended, e.g. after SessionTimeout without requests."""
+
+    @pytest.fixture()
+    def sm(self) -> SessionManager:
+        sm = SessionManager(hostname="192.0.2.1", ssl_verify=False)
+        sm.context_id = "ctx-1"  # logged in, with the headers a login sets
+        sm.session.headers.update({"Content-Type": "application/x-sah-ws-4-call+json", "Authorization": "X-Sah ctx-1"})
+        sm.session.send = MagicMock()
+        return sm
+
+    @staticmethod
+    def _sent(sm: SessionManager) -> list[tuple[str, str]]:
+        """The requests sent: their URL, and their Authorization header or, for logins and logouts, the method."""
+        sent = []
+        for call in sm.session.send.call_args_list:
+            request = call.args[0]
+            label = json.loads(request.body)["method"] if request.url.endswith("/ws") else request.headers.get("Authorization")
+            sent.append((request.url, label))
+        return sent
+
+    def test_logs_in_again_and_resends(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, _LOGOUT, _login_response("ctx-2"), _response(200, b'{"status": "ok"}')]
+        assert sm.post("/sysbus/DNS:get", {"parameters": {}}) == '{"status": "ok"}'
+        assert self._sent(sm) == [
+            ("https://192.0.2.1/sysbus/DNS:get", "X-Sah ctx-1"),
+            ("https://192.0.2.1/ws", "releaseContext"),
+            ("https://192.0.2.1/ws", "createContext"),
+            ("https://192.0.2.1/sysbus/DNS:get", "X-Sah ctx-2"),
+        ]
+        assert sm.context_id == "ctx-2"
+
+    def test_get_logs_in_again(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, _LOGOUT, _login_response("ctx-2"), _response(200, b"ok")]
+        assert sm.get("/sysbus/NeMo/Intf/wl0/WPS") == "ok"
+        assert self._sent(sm)[-1] == ("https://192.0.2.1/sysbus/NeMo/Intf/wl0/WPS", "X-Sah ctx-2")
+
+    def test_an_endpoint_that_refuses_every_session_raises(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, _LOGOUT, _login_response("ctx-2"), _REFUSED]
+        with pytest.raises(requests.HTTPError, match="401"):
+            sm.post("/sysbus/WebuiupgradeService:getReleaseNotes")
+        assert sm.session.send.call_count == 4  # logged in again once, not more
+
+    def test_logs_in_even_if_the_logout_fails(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, requests.ConnectionError("reset"), _login_response("ctx-2"), _response(200)]
+        sm.post("/sysbus/DNS:get")
+        assert sm.context_id == "ctx-2"
+
+    def test_a_failed_login_raises(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, _LOGOUT, _response(401)]
+        with pytest.raises(requests.HTTPError, match="401"):
+            sm.post("/sysbus/DNS:get")
+        assert sm.session.send.call_count == 3
+
+    def test_requests_without_login_are_not_resent(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED]
+        with pytest.raises(requests.HTTPError):
+            sm.post("/sysbus/NMC/Wifi:get", auth_required=False)
+        assert sm.session.send.call_count == 1
+
+    def test_uses_the_session_another_thread_logged_in_with(self, sm: SessionManager) -> None:
+        def send(request: requests.PreparedRequest, **kwargs) -> requests.Response:
+            if sm.session.send.call_count == 1:  # another thread logs in while this request is refused
+                sm.context_id = "ctx-2"
+                sm.session.headers["Authorization"] = "X-Sah ctx-2"
+                return _REFUSED
+            return _response(200)
+
+        sm.session.send.side_effect = send
+        sm.post("/sysbus/DNS:get")
+        assert self._sent(sm) == [("https://192.0.2.1/sysbus/DNS:get", "X-Sah ctx-1"), ("https://192.0.2.1/sysbus/DNS:get", "X-Sah ctx-2")]
+
+    def test_download_resends_with_the_new_context(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, _LOGOUT, _login_response("ctx-2"), _response(200, b"QUJD\n")]
+        assert sm.download("/backup") == "QUJD\n"
+        assert self._sent(sm)[-1][0] == "https://192.0.2.1/backup?context=ctx-2"
+
+    def test_upload_resends_with_the_new_context(self, sm: SessionManager) -> None:
+        sm.session.send.side_effect = [_REFUSED, _LOGOUT, _login_response("ctx-2"), _response(200)]
+        sm.upload("/restore", "restore", "internetbox.cfg", b"QUJD\n")
+        assert b'name="context"\r\n\r\nctx-2\r\n' in sm.session.send.call_args.args[0].body
+
+    def test_threads_log_in_once(self) -> None:
+        sm = SessionManager(hostname="192.0.2.1", ssl_verify=False)
+        logging_in, finish_login = threading.Event(), threading.Event()
+
+        def slow_login() -> None:
+            logging_in.set()
+            finish_login.wait(5)
+            sm.context_id = "ctx-1"
+
+        with patch.object(sm, "_login", side_effect=slow_login) as login:
+            first = threading.Thread(target=sm._ensure_authenticated)
+            first.start()
+            logging_in.wait(5)
+            second = threading.Thread(target=sm._ensure_authenticated)
+            second.start()
+            time.sleep(0.1)  # the second thread waits for the first one's login
+            finish_login.set()
+            first.join(5)
+            second.join(5)
+        assert login.call_count == 1
+
+
+class TestRouterErrors:
+    """The router explains most refusals in an "errors" list, e.g. which parameters it didn't accept."""
+
+    @pytest.fixture()
+    def sm(self) -> SessionManager:
+        sm = SessionManager(hostname="192.0.2.1", ssl_verify=False)
+        sm.context_id = "ctx-1"
+        sm.session.send = MagicMock()
+        return sm
+
+    def test_reasons_are_in_the_message(self, sm: SessionManager) -> None:
+        body = (
+            b'{"status": null, "errors": [{"error": 1114117, "description": "Invalid port-range", "info": "InternalPort, ExternalPort"}]}'
+        )
+        sm.session.send.return_value = _response(500, body)
+        with pytest.raises(requests.HTTPError) as raised:
+            sm.post("/sysbus/Firewall:setPortForwarding")
+        assert str(raised.value).startswith("500 Server Error")
+        assert str(raised.value).endswith("\nRouter says: Invalid port-range (InternalPort, ExternalPort)")
+        assert raised.value.response.status_code == 500
+
+    def test_several_reasons(self, sm: SessionManager) -> None:
+        body = b'{"errors": [{"description": "Invalid value", "info": "SSID"}, {"description": "Missing", "info": "mibs"}]}'
+        sm.session.send.return_value = _response(500, body)
+        with pytest.raises(requests.HTTPError, match=r"Router says: Invalid value \(SSID\); Missing \(mibs\)$"):
+            sm.post("/sysbus/NeMo/Intf/wl0:setWLANConfig")
+
+    @pytest.mark.parametrize("body", [b"<html>Internal error</html>", b'{"status": null}', b'{"errors": []}', b"[]"])
+    def test_without_reasons(self, sm: SessionManager, body: bytes) -> None:
+        sm.session.send.return_value = _response(500, body)
+        with pytest.raises(requests.HTTPError) as raised:
+            sm.post("/sysbus/Firewall:setPortForwarding")
+        assert "Router says" not in str(raised.value)
 
 
 # ── APIClient ─────────────────────────────────────────────────────────

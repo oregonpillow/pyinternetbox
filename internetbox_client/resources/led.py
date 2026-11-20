@@ -3,6 +3,7 @@ from typing import Literal
 
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import camel
+from internetbox_client.utils.labels import write
 
 
 class LED(APIClient):
@@ -21,6 +22,7 @@ class LED(APIClient):
         data = {"parameters": {}}
         return self.post(f"/sysbus/LEDs/LED/{camel(type)}:get", data)
 
+    @write
     def set(self, type: Literal["Status", "Wireless"], brightness: int = 100) -> str:
         """Set LED brightness on device.
 
@@ -48,6 +50,7 @@ class LED(APIClient):
         data = {"parameters": {}}
         return self.post(f"/sysbus/NMC/LEDs/LED/{camel(type)}:get", data)
 
+    @write
     def party_time(self, mode: Literal["on", "off"] = "on", flashes: int = 10, interval: float = 0.3) -> str:
         """Flash the Status and Wireless LEDs alternately for a fun party effect.
 
@@ -121,6 +124,7 @@ class LED(APIClient):
         ")": "-.--.-",
     }
 
+    @write
     def morse_code(self, message: str, led: Literal["Status", "Wireless"] = "Status", dot_duration: float = 0.15) -> str:
         """Flash a message in Morse code on the specified LED(s).
 

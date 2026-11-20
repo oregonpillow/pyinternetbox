@@ -4,6 +4,7 @@ import json
 
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import decode_nested_json
+from internetbox_client.utils.labels import write
 
 
 class SpeedTest(APIClient):
@@ -23,6 +24,7 @@ class SpeedTest(APIClient):
         except (json.JSONDecodeError, ValueError):
             return raw
 
+    @write
     def start(self, origin: str = "webui", wait_for_lan_result: bool = False) -> str:
         """Start a speed test.
 

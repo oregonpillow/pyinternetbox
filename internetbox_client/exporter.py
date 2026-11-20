@@ -9,8 +9,8 @@ Samples that a callback stops reporting (e.g. a device that disconnected) are
 dropped after the callback's next successful run, so stale label sets do not
 linger until the exporter restarts.
 
-The session authenticates lazily and re-authenticates automatically if a
-401 is received mid-scrape.
+The session authenticates lazily and logs in again by itself when the
+router ends it, e.g. after a while without requests.
 """
 
 from __future__ import annotations
@@ -191,12 +191,6 @@ class InternetBoxCollector(Collector):
                             gauge.prune(self._cycle)
             except Exception:  # noqa: BLE001
                 logger.exception("Error in collection callback %r — will retry next cycle.", cb.__name__ if hasattr(cb, "__name__") else cb)
-                # If the session was invalidated (HTTP 401), reset the context
-                # so the next cycle triggers automatic re-authentication.
-                try:
-                    self._client._sm.context_id = None  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass
             finally:
                 self._current_callback = None
 

@@ -1,5 +1,6 @@
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
+from internetbox_client.utils.labels import write
 
 _DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -31,6 +32,7 @@ class MST(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/ToD:listMST", data)
 
+    @write
     def set(self, mac: str, enable: bool = True, minutes_per_day: int | None = None, allowed_time: dict | None = None) -> str:
         """Create or update a device's daily internet time limit (Max Surf Time).
 
@@ -61,6 +63,7 @@ class MST(APIClient):
             parameters["allowedTime"] = allowed
         return self.post("/sysbus/ToD:setMST", {"parameters": parameters})
 
+    @write
     def delete(self, mac: str) -> str:
         """Delete a device's daily internet time limit (Max Surf Time) entry.
 

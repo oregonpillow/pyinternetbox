@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import logging
 import os
+import threading
+from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Mapping
 from urllib.parse import urljoin, urlsplit
@@ -85,6 +88,14 @@ def _resolve_ssl_verify(base_url: str, ssl_verify: bool | None) -> bool:
     return True
 
 
+def _router_errors(response: requests.Response) -> str:
+    """The reasons the router gave for refusing a request, e.g. "Invalid port-range (InternalPort, ExternalPort)"."""
+    try:
+        return "; ".join(f"{error.get('description')} ({error.get('info')})" for error in response.json()["errors"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return ""
+
+
 class SessionManager:
     """Manages a single authenticated session to the Internet Box.
 
@@ -92,6 +103,8 @@ class SessionManager:
     endpoint). A session is created by calling ``createContext`` on the
     ``sah.Device.Information`` service. The resulting context ID and
     session cookie are stored and sent with every subsequent request.
+    When the router ends the session, e.g. after a while without requests,
+    the next request logs in again. Threads sharing an instance log in once.
 
     Supports the context-manager protocol so sessions are automatically
     closed on exit.
@@ -118,12 +131,18 @@ class SessionManager:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.context_id: str | None = None
         self.auth_url = urljoin(self.base_url, "ws")
+        # Held while logging in, so threads sharing the session log in once instead of replacing each other's session.
+        self._login_lock = threading.Lock()
 
     def _ensure_authenticated(self) -> None:
         """Authenticate lazily on the first request that requires auth."""
         if self.context_id is not None:
             return
+        with self._login_lock:
+            if self.context_id is None:
+                self._login()
 
+    def _login(self) -> None:
         self.session.headers.update({"Content-Type": "application/x-sah-ws-4-call+json", "Authorization": "X-Sah-Login"})
 
         login_data = {
@@ -135,18 +154,22 @@ class SessionManager:
         login_response = self.session.post(url=self.auth_url, json=login_data, timeout=self.timeout)
         login_response.raise_for_status()
 
-        self.context_id = login_response.json()["data"]["contextID"]
-        self.session.headers.update({"Authorization": f"X-Sah {self.context_id}"})
+        context_id = login_response.json()["data"]["contextID"]
+        # Header first: another thread that sees the new context ID must also send it.
+        self.session.headers.update({"Authorization": f"X-Sah {context_id}"})
+        self.context_id = context_id
 
-    def close(self) -> None:
-        """Log out and close the underlying HTTP session.
+    def _login_again(self, refused: str | None) -> None:
+        """Replace the session the router refused with a new one, unless another thread has done so already."""
+        with self._login_lock:
+            if self.context_id != refused:
+                return
+            # The session may still be valid if only the endpoint refused it: end it rather than leave it open.
+            with contextlib.suppress(requests.RequestException):
+                self._logout()
+            self._login()
 
-        Sends a ``releaseContext`` RPC to invalidate the session token
-        on the gateway, then closes the underlying ``requests.Session``.
-        """
-        if self.context_id is None:
-            return
-
+    def _logout(self) -> None:
         self.session.headers.update({"Authorization": f"X-Sah-Logout {self.context_id}"})
 
         logout_data = {
@@ -159,6 +182,19 @@ class SessionManager:
             self.session.post(url=self.auth_url, json=logout_data, timeout=self.timeout)
         finally:
             self.context_id = None
+
+    def close(self) -> None:
+        """Log out and close the underlying HTTP session.
+
+        Sends a ``releaseContext`` RPC to invalidate the session token
+        on the gateway, then closes the underlying ``requests.Session``.
+        """
+        if self.context_id is None:
+            return
+
+        try:
+            self._logout()
+        finally:
             self.session.close()
 
     def __enter__(self) -> SessionManager:
@@ -168,47 +204,65 @@ class SessionManager:
         self.close()
         return False
 
+    def _send(self, send: Callable[[], requests.Response], auth_required: bool = True) -> requests.Response:
+        """Send a request, logging in first if it needs the session.
+
+        The router answers HTTP 401 once the session has ended: after SessionTimeout without requests (600 s on an
+        Internet Box 4, see HTTPService:get), a restart or a logout. The request is then sent once more with a new
+        session. Some endpoints answer 401 to every session, so a second 401 is raised. A 401 means the router didn't run
+        the request, so resending it is safe.
+
+        Raises:
+            requests.HTTPError: if the router refuses the request. The message ends with the reasons the router gave,
+                if any, e.g. "Router says: Invalid port-range (InternalPort, ExternalPort)".
+        """
+        if not auth_required:
+            response = send()
+        else:
+            self._ensure_authenticated()
+            context = self.context_id
+            response = send()
+            if response.status_code == 401:
+                logger.info("The router refused the session; logging in again.")
+                self._login_again(context)
+                response = send()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            if reasons := _router_errors(response):
+                raise requests.HTTPError(f"{exc}\nRouter says: {reasons}", response=response) from None
+            raise
+        return response
+
     def get(self, endpoint: str | None = None, auth_required: bool = True) -> str:
         """Send an HTTP GET request to the gateway."""
-        if auth_required:
-            self._ensure_authenticated()
         headers = _NO_AUTH_HEADERS if not auth_required else {}
         url = urljoin(self.base_url, endpoint) if endpoint else self.base_url
-        response = self.session.get(url=url, headers=headers, timeout=self.timeout)
-        response.raise_for_status()
-        return response.text
+        return self._send(lambda: self.session.get(url=url, headers=headers, timeout=self.timeout), auth_required).text
 
     def post(self, endpoint: str | None = None, data: Mapping[str, Any] | None = None, auth_required: bool = True) -> str:
         """Send an HTTP POST request to the gateway."""
-        if auth_required:
-            self._ensure_authenticated()
         headers = _NO_AUTH_HEADERS if not auth_required else {}
         url = urljoin(self.base_url, endpoint) if endpoint else self.base_url
-        response = self.session.post(url=url, json=data, headers=headers, timeout=self.timeout)
-        response.raise_for_status()
-        return response.text
+        return self._send(lambda: self.session.post(url=url, json=data, headers=headers, timeout=self.timeout), auth_required).text
 
     def download(self, endpoint: str) -> str:
         """Download a file the way the web UI does: a GET request with the session's context ID as a query parameter."""
-        self._ensure_authenticated()
         url = urljoin(self.base_url, endpoint)
-        response = self.session.get(url=url, params={"context": self.context_id}, timeout=TRANSFER_TIMEOUT)
-        response.raise_for_status()
-        return response.text
+        return self._send(lambda: self.session.get(url=url, params={"context": self.context_id}, timeout=TRANSFER_TIMEOUT)).text
 
     def upload(self, endpoint: str, field: str, filename: str, content: bytes) -> str:
         """Upload a file the way the web UI's forms do: multipart/form-data, with the session's context ID first."""
-        self._ensure_authenticated()
         url = urljoin(self.base_url, endpoint)
-        response = self.session.post(
-            url=url,
-            data={"context": self.context_id},
-            files={field: (filename, content, "application/octet-stream")},
-            headers={"Content-Type": None},  # drops the session's JSON content type, so requests sets the multipart one
-            timeout=TRANSFER_TIMEOUT,
-        )
-        response.raise_for_status()
-        return response.text
+        return self._send(
+            lambda: self.session.post(
+                url=url,
+                data={"context": self.context_id},
+                files={field: (filename, content, "application/octet-stream")},
+                headers={"Content-Type": None},  # drops the session's JSON content type, so requests sets the multipart one
+                timeout=TRANSFER_TIMEOUT,
+            )
+        ).text
 
 
 class APIClient:

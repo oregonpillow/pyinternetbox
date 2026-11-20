@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.labels import disruptive, secret_result, write
 
 
 def _read_backup(path: str) -> bytes:
@@ -46,6 +47,7 @@ class NMC(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/NMC:getLANIP", data)
 
+    @disruptive
     def reboot(self, reason: str = "pyinternetbox") -> str:
         """Restart the router. Internet, Wi-Fi and phone are down for a few minutes.
 
@@ -59,6 +61,7 @@ class NMC(APIClient):
         data = {"parameters": {"reason": reason}}
         return self.post("/sysbus/NMC:reboot", data)
 
+    @secret_result
     def backup(self) -> str:
         """Download a backup of all settings, e.g. ibox nmc backup > internetbox.cfg
 
@@ -71,6 +74,7 @@ class NMC(APIClient):
         """
         return self.download("/backup")
 
+    @disruptive
     def restore(self, path: str) -> str:
         """Replace all settings with a backup file. The router restarts: internet, Wi-Fi and phone are down for a few minutes.
 
@@ -94,6 +98,7 @@ class NMC(APIClient):
             raise ValueError(f"The router didn't confirm the restore. It answered: {response[:300]}")
         return response
 
+    @write
     def backup_to_swisscom(self) -> str:
         """Upload a backup of the settings to Swisscom, as the web UI does when settings are saved.
 
