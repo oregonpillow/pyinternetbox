@@ -3,10 +3,12 @@ import re
 
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
-from internetbox_client.utils.labels import write
+from internetbox_client.utils.labels import disruptive, write
 
 WEEK = 7 * 86400  # schedule times are seconds since Monday 00:00
 _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# The Wi-Fi schedule in the web UI's power settings: one schedule, with the ID "wl0", for all Wi-Fi networks.
+_WIFI = {"type": "WLAN", "ID": "wl0"}
 
 
 def _week_seconds(value: int | str) -> int:
@@ -130,3 +132,91 @@ class Scheduler(APIClient):
             self.enable_device_schedule(mac, False)
         data = {"parameters": {"type": "ToD", "ID": mac}}
         return self.post("/sysbus/Scheduler:removeSchedules", data)
+
+    def wifi_schedule(self) -> str:
+        """Get the Wi-Fi schedule, which turns Wi-Fi off at set times to save power (the web UI's power settings).
+
+        In the response, "schedule" lists the periods when Wi-Fi is off, "enable" whether the schedule is on, and
+        "value" the current state: "Disable" while Wi-Fi is off. Without a schedule, the response is {"status": false}.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": _WIFI}
+        return self.post("/sysbus/Scheduler:getSchedule", data)
+
+    @disruptive
+    def set_wifi_schedule(self, off_periods: list, enable: bool = True) -> str:
+        """Turn Wi-Fi off at set times every week, like the Wi-Fi schedule in the web UI's power settings.
+
+        The schedule covers all Wi-Fi networks, including the guest network. While it's on, wireless devices lose
+        their connection during the off periods, including this computer if it's on Wi-Fi.
+
+        Args:
+            off_periods (list): when Wi-Fi is off, as [{"begin": ..., "end": ...}], like the blocked periods of
+                set_device_schedule(): times such as "Mon 00:30" or seconds since Monday 00:00. A period may run past
+                Sunday midnight. With [], Wi-Fi stays on, and the schedule is saved turned off, like in the web UI.
+            enable (bool): whether the schedule is on. Default is True.
+
+        Example:
+            Wi-Fi off every night from 01:00 to 06:00:
+            [{"begin": "Mon 01:00", "end": "Mon 06:00"}, {"begin": "Tue 01:00", "end": "Tue 06:00"}, ...]
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: if Wi-Fi would be off all week. Use wifi.set_enabled(False) to turn it off.
+
+        """
+        schedule = _blocked_periods(off_periods)
+        if schedule == [{"begin": 0, "end": WEEK, "state": "Disable"}]:
+            raise ValueError(
+                "The schedule would turn Wi-Fi off all week. To turn Wi-Fi off, use wifi.set_enabled(False) (ibox wifi set-enabled false)."
+            )
+        return self._save_wifi_schedule(schedule, enable and bool(schedule))
+
+    @disruptive
+    def enable_wifi_schedule(self, enable: bool = True) -> str:
+        """Turn the Wi-Fi schedule on or off, keeping its periods, like its switch in the web UI's power settings.
+
+        While the schedule is on, wireless devices lose their connection during its off periods.
+
+        Args:
+            enable (bool): True to turn the schedule on, False to turn it off. Default is True.
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: if there's no Wi-Fi schedule. Create one with set_wifi_schedule().
+
+        """
+        answer = json.loads(self.wifi_schedule())
+        info = (answer.get("data") or {}).get("scheduleInfo") if answer.get("status") else None
+        if not info:
+            raise ValueError("There's no Wi-Fi schedule. Create one with set_wifi_schedule().")
+        schedule = info.get("schedule") or []
+        if enable and not schedule:
+            raise ValueError("The Wi-Fi schedule has no off periods, so it can't be turned on. Set some with set_wifi_schedule().")
+        return self._save_wifi_schedule(schedule, enable)
+
+    @write
+    def remove_wifi_schedule(self) -> str:
+        """Delete the Wi-Fi schedule. Wi-Fi then stays on.
+
+        Returns:
+            str: response content
+
+        """
+        # As for device schedules: the router may ignore the removal of a schedule that's on.
+        if json.loads(self.wifi_schedule()).get("status"):
+            self.post("/sysbus/Scheduler:enableSchedule", {"parameters": {**_WIFI, "enable": False}})
+        data = {"parameters": _WIFI}
+        return self.post("/sysbus/Scheduler:removeSchedules", data)
+
+    def _save_wifi_schedule(self, schedule: list[dict], enable: bool) -> str:
+        """Save the Wi-Fi schedule, as the web UI does for every change, including turning it on or off."""
+        info = {"ID": _WIFI["ID"], "enable": enable, "base": "Weekly", "def": "Enable", "override": "", "schedule": schedule}
+        return self.post("/sysbus/Scheduler:addSchedule", {"parameters": {"type": _WIFI["type"], "info": info}})

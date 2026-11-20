@@ -84,6 +84,27 @@ def test_methods_without_a_label_only_read(cls: type, name: str) -> None:
         ("wifi.set_network", "disruptive"),
         ("wifi.set_guest_network", "disruptive"),
         ("wifi.set_guest_enabled", "disruptive"),
+        ("wifi.set_channel", "disruptive"),
+        ("wifi.search_channel", "disruptive"),
+        ("firewall.custom_rules", "read"),
+        ("firewall.custom_policy", "read"),
+        ("firewall.set_custom_rule", "write"),
+        ("firewall.enable_custom_rule", "write"),
+        ("firewall.delete_custom_rule", "write"),
+        ("firewall.set_custom_policy", "disruptive"),
+        ("dyndns.set_host", "write"),
+        ("dyndns.delete_host", "write"),
+        ("nmc.set_static_route", "write"),
+        ("nmc.delete_static_route", "write"),
+        ("scheduler.wifi_schedule", "read"),
+        ("scheduler.set_wifi_schedule", "disruptive"),
+        ("scheduler.enable_wifi_schedule", "disruptive"),
+        ("scheduler.remove_wifi_schedule", "write"),
+        ("power_management.set_wifi_6ghz_power_saving", "write"),
+        ("wireguard.add_client", "write"),
+        ("wireguard.set_client", "write"),
+        ("wireguard.delete_client", "write"),
+        ("wireguard.set_server_enabled", "disruptive"),
     ],
 )
 def test_labels(method: str, expected: str) -> None:
@@ -93,7 +114,11 @@ def test_labels(method: str, expected: str) -> None:
 
 
 def test_secret_results() -> None:
-    assert {f"{cls.__name__}.{name}" for cls, name in _methods() if has_secret_result(getattr(cls, name))} == {"DECT.pin", "NMC.backup"}
+    assert {f"{cls.__name__}.{name}" for cls, name in _methods() if has_secret_result(getattr(cls, name))} == {
+        "DECT.pin",
+        "NMC.backup",
+        "Wireguard.add_client",
+    }
 
 
 def test_decorators_return_the_method() -> None:

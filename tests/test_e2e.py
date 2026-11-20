@@ -16,13 +16,16 @@ To also run destructive tests (write to the router)::
     uv run pytest tests/test_e2e.py -m destructive -v
 
 Tests that change settings are marked ``@pytest.mark.destructive``. They leave the configuration as they found it:
-they write the current value back (LED brightness, Wi-Fi TX power, firewall levels, UPnP, WPS, DNS servers for
-devices), or create something temporary and delete it again (a disabled port forwarding rule and a phone book contact
-named ``DUMMY_RULE``, and a device entry, IP address reservation, schedule and time limit for ``FAKE_MAC``, which no
-real device uses). They skip rather than touch existing settings, e.g. a DMZ host or calls in the call list.
+they write the current value back (LED brightness, Wi-Fi TX power, firewall levels and basic actions, UPnP, WPS, DNS
+servers for devices, 6 GHz power saving), or create something temporary and delete it again (a disabled port
+forwarding rule, custom firewall rule and DynDNS host and a phone book contact named after ``DUMMY_RULE``, a WireGuard
+client, a static route to an unused network, and a device entry, IP address reservation, schedule and time limit for
+``FAKE_MAC``, which no real device uses). They skip rather than touch existing settings, e.g. a DMZ host or calls in
+the call list.
 
-Tests that interrupt the network for everyone, such as turning Wi-Fi off and on or writing the Wi-Fi names back, are
-also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is set.
+Tests that interrupt the network for everyone, such as turning Wi-Fi off and on, writing the Wi-Fi names or channels
+back or saving a Wi-Fi schedule, are also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1``
+is set.
 """
 
 from __future__ import annotations
@@ -73,6 +76,14 @@ def fake_mac(sm):
 @pytest.fixture(scope="session")
 def free_ip(sm) -> str:
     """A LAN address outside the DHCP pool that no device, lease, port forwarding rule or DMZ uses."""
+    free = _free_addresses(sm)
+    if not free:
+        pytest.skip("No free LAN address outside the DHCP pool")
+    return free[0]
+
+
+def _free_addresses(sm) -> list[str]:
+    """The LAN addresses outside the DHCP pool that no device, lease, port forwarding rule or DMZ uses, highest first."""
     lan = json.loads(_make(NMC, sm).lan_ip())["data"]
     pool = range(int(ipaddress.ip_address(lan["DHCPMinAddress"])), int(ipaddress.ip_address(lan["DHCPMaxAddress"])) + 1)
     used = {lan["Address"]}
@@ -83,10 +94,7 @@ def free_ip(sm) -> str:
     for rules in (json.loads(firewall.port_forwarding())["status"], json.loads(firewall.dmz())["status"]):
         used |= {rule["DestinationIPAddress"] for rule in rules.values()}
     network = ipaddress.ip_network(f"{lan['Address']}/{lan['Netmask']}", strict=False)
-    for host in reversed(list(network.hosts())):
-        if int(host) not in pool and str(host) not in used:
-            return str(host)
-    pytest.skip("No free LAN address outside the DHCP pool")
+    return [str(host) for host in reversed(list(network.hosts())) if int(host) not in pool and str(host) not in used]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -188,6 +196,29 @@ def _port_forwards(firewall) -> dict[str, tuple]:
     rules = json.loads(firewall.port_forwarding())["status"]
     fields = ("Enable", "Protocol", "ExternalPort", "InternalPort", "DestinationIPAddress", "Description")
     return {rule_id: tuple(rule[field] for field in fields) for rule_id, rule in rules.items()}
+
+
+def _custom_rules(firewall) -> dict[tuple[str, str], tuple]:
+    """Custom firewall rules by (chain, ID), reduced to their settings."""
+    fields = ("Enable", "Target", "Protocol", "DestinationPort", "SourceMACAddress", "DestinationMACAddress", "Description")
+    return {(chain, rule_id): tuple(rule.get(field) for field in fields) for chain, rule_id, rule in firewall._custom_rules()}
+
+
+def _dyndns_hosts(dyndns) -> list[tuple]:
+    """DynDNS hosts, without their password (kept out of assertion messages) and status (it changes on its own)."""
+    return sorted((host["service"], host["hostname"], host["username"], host["enable"]) for host in json.loads(dyndns.hosts())["status"])
+
+
+def _wireguard_server(wireguard) -> dict[str, dict]:
+    """The WireGuard server's settings, without its status (it can change on its own, e.g. after it was turned off)."""
+    servers = json.loads(wireguard.server_status())["status"]
+    return {key: {name: value for name, value in server.items() if name != "Status"} for key, server in servers.items()}
+
+
+def _wireguard_clients(wireguard) -> dict[str, tuple]:
+    """WireGuard clients by name, reduced to their settings."""
+    fields = ("Enable", "IntranetAccess", "PublicKey", "PrivateIPAddress", "ExtraData")
+    return {name: tuple(client.get(field) for field in fields) for name, client in wireguard._clients().items()}
 
 
 def _runner_is_wired(sm) -> bool:
@@ -460,6 +491,28 @@ class TestE2EDynDNS:
     def test_services(self, svc):
         _ok(svc.services())
 
+    @pytest.mark.destructive
+    def test_host_add_update_delete(self, svc):
+        """Add a dummy host that the router doesn't keep up to date, replace it and delete it. Swisscom's host stays.
+
+        Skipped if there's another host: the web UI only shows one besides Swisscom's.
+        """
+        before = _dyndns_hosts(svc)
+        if any(service.lower() != "swisscom" for service, *_ in before):
+            pytest.skip("A DynDNS host besides Swisscom's is set; not touching it")
+        hostname = f"{DUMMY_RULE}.example.com"
+        try:
+            assert _no_errors(svc.set_host("dyndns", hostname, "pyinternetbox", "not-a-real-password", enable=False))["status"] is True
+            assert (set(_dyndns_hosts(svc)) - set(before)) == {("dyndns", hostname, "pyinternetbox", False)}
+            # Another account for the same service: replaced, not added.
+            _no_errors(svc.set_host("dyndns", hostname, "pyinternetbox-2", "not-a-real-password", enable=False))
+            assert (set(_dyndns_hosts(svc)) - set(before)) == {("dyndns", hostname, "pyinternetbox-2", False)}
+            _no_errors(svc.delete_host(hostname))
+        finally:
+            for host in set(_dyndns_hosts(svc)) - set(before):
+                svc.delete_host(host[1])
+        assert _dyndns_hosts(svc) == before
+
 
 # ── Events ────────────────────────────────────────────────────────────────────
 
@@ -540,6 +593,69 @@ class TestE2EFirewall:
 
     def test_custom_rule(self, svc):
         _ok(svc.custom_rule())
+
+    def test_custom_rules(self, svc):
+        rules = json.loads(svc.custom_rules())
+        assert {(rule["chain"], rule["id"]) for rule in rules} == set(_custom_rules(svc))
+        assert {rule["action"] for rule in rules} <= {"allow", "block"}
+
+    def test_custom_policy(self, svc):
+        policy = json.loads(svc.custom_policy())
+        assert set(policy) == {"ipv4", "ipv6_outbound", "ipv6_inbound"}
+        assert set(policy.values()) <= {"allow", "block"}
+
+    @pytest.mark.destructive
+    def test_custom_rule_add_update_move_delete(self, svc, fake_mac):
+        """Add a disabled dummy rule for FAKE_MAC, change it, move it to IPv6, turn it on and off and delete it.
+
+        Custom rules only apply at the Custom firewall level, and this one only to a device that doesn't exist.
+        """
+        before = _custom_rules(svc)
+        assert DUMMY_RULE not in {rule[-1] for rule in before.values()}
+
+        def dummy() -> list[tuple]:
+            """The dummy rules' chain and settings."""
+            return [(chain, *rule) for (chain, _), rule in _custom_rules(svc).items() if rule[-1] == DUMMY_RULE]
+
+        try:
+            created = _no_errors(svc.set_custom_rule(DUMMY_RULE, "65001", "block", protocol="tcp", device=fake_mac, enabled=False))
+            assert ("Custom", created["status"]) in _custom_rules(svc)
+            assert dummy() == [("Custom", False, "Drop", "6", "65001", fake_mac, "", DUMMY_RULE)]
+            # For all devices now: the router would keep the device if the rule weren't replaced.
+            _no_errors(svc.set_custom_rule(DUMMY_RULE, "65001-65002", "allow", enabled=False))
+            assert dummy() == [("Custom", False, "Accept", "6,17", "65001-65002", "", "", DUMMY_RULE)]
+            # Inbound IPv6: another chain, with the device as the destination.
+            _no_errors(svc.set_custom_rule(DUMMY_RULE, "65001", "block", ip_version=6, direction="inbound", device=fake_mac, enabled=False))
+            moved = [("Custom_V6In", False, "Drop", "6,17", "65001", "", fake_mac, DUMMY_RULE)]
+            assert dummy() == moved
+            _no_errors(svc.enable_custom_rule(DUMMY_RULE))
+            assert dummy() == [("Custom_V6In", True, *moved[0][2:])]
+            _no_errors(svc.enable_custom_rule(DUMMY_RULE, False))
+            assert dummy() == moved
+            _no_errors(svc.delete_custom_rule(DUMMY_RULE))
+        finally:
+            for _ in range(3):
+                if dummy():
+                    svc.delete_custom_rule(DUMMY_RULE)
+        assert _custom_rules(svc) == before
+
+    @pytest.mark.destructive
+    def test_set_custom_policy_reverts(self, svc):
+        """Write the basic actions of the custom firewall back: effective no-op."""
+        chains = {
+            "ipv4": (4, "outbound", "Custom"),
+            "ipv6_outbound": (6, "outbound", "Custom_V6Out"),
+            "ipv6_inbound": (6, "inbound", "Custom_V6In"),
+        }
+        raw = {key: svc.post("/sysbus/Firewall:getChainPolicy", {"parameters": {"chain": chain}}) for key, (_, _, chain) in chains.items()}
+        before = json.loads(svc.custom_policy())
+        for key, (ip_version, direction, _) in chains.items():
+            if json.loads(raw[key])["status"] in ("Accept", "Drop"):  # a chain without a policy keeps none
+                _no_errors(svc.set_custom_policy(before[key], ip_version, direction))
+        assert json.loads(svc.custom_policy()) == before
+        assert {
+            key: svc.post("/sysbus/Firewall:getChainPolicy", {"parameters": {"chain": chain}}) for key, (_, _, chain) in chains.items()
+        } == raw
 
     def test_level(self, svc):
         _ok(svc.level())
@@ -755,6 +871,38 @@ class TestE2ENMC:
     def test_static_routes(self, svc):
         _ok(svc.static_routes())
 
+    @pytest.mark.destructive
+    def test_static_route_add_update_delete(self, svc, sm, free_ip):
+        """Route an unused private network to unused LAN addresses, change its gateway and delete it."""
+        destination, network = "172.31.254.0/24", ipaddress.ip_network("172.31.254.0/24")
+        before, forwards = json.loads(svc.static_routes())["status"], _port_forwards(_make(Firewall, sm))
+        if any(network.overlaps(ipaddress.ip_network(f"{route['Dst']}/{route['DstLen']}", strict=False)) for route in before.values()):
+            pytest.skip(f"A static route overlaps {destination}; not touching it")
+        gateways = [free_ip, *(address for address in _free_addresses(sm) if address != free_ip)][:2]
+        if len(gateways) < 2:
+            pytest.skip("Fewer than two free LAN addresses outside the DHCP pool")
+
+        def added() -> dict[str, tuple]:
+            routes = json.loads(svc.static_routes())["status"]
+            return {
+                name: (route["Dst"], route["DstLen"], route["Gateway"], route["Enable"])
+                for name, route in routes.items()
+                if name not in before
+            }
+
+        try:
+            _no_errors(svc.set_static_route(destination, gateways[0]))
+            ((name, route),) = added().items()
+            assert route == ("172.31.254.0", 24, gateways[0], True)
+            _no_errors(svc.set_static_route(destination, gateways[1]))
+            assert added() == {name: ("172.31.254.0", 24, gateways[1], True)}
+            _no_errors(svc.delete_static_route(destination))
+        finally:
+            for name in added():
+                svc.delete_static_route(name)
+        assert json.loads(svc.static_routes())["status"].keys() == before.keys()
+        assert _port_forwards(_make(Firewall, sm)) == forwards
+
     def test_network_config(self, svc):
         _ok(svc.network_config())
 
@@ -840,6 +988,15 @@ class TestE2EPowerManagement:
     def test_profiles(self, svc):
         _ok(svc.profiles())
 
+    @pytest.mark.destructive
+    def test_set_wifi_6ghz_power_saving_reverts(self, svc):
+        """Write the 6 GHz power saving setting back: effective no-op."""
+        profile = json.loads(svc.profiles())["status"].get("ECO_6G_SCS")
+        if not profile:
+            pytest.skip("This router has no 6 GHz power saving")
+        _no_errors(svc.set_wifi_6ghz_power_saving(profile["Activate"]))
+        assert json.loads(svc.profiles())["status"]["ECO_6G_SCS"]["Activate"] is profile["Activate"]
+
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
@@ -866,6 +1023,40 @@ class TestE2EScheduler:
             if json.loads(svc.device_schedule(fake_mac)).get("status"):
                 svc.remove_device_schedule(fake_mac)
         assert json.loads(svc.device_schedule(fake_mac))["status"] is False
+
+    def test_wifi_schedule(self, svc):
+        _ok(svc.wifi_schedule())
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_wifi_schedule_set_enable_remove(self, svc):
+        """Create a Wi-Fi schedule with one off minute half a week from now, turn it on and off, and delete it.
+
+        Wi-Fi stays on, but the router may restart it while saving. Skipped if there's a Wi-Fi schedule.
+        """
+        if json.loads(svc.wifi_schedule())["status"]:
+            pytest.skip("A Wi-Fi schedule is set; not touching it")
+        week, now = 7 * 86400, time.localtime()
+        begin = (now.tm_wday * 86400 + now.tm_hour * 3600 + now.tm_min * 60 + week // 2) % week  # seconds since Monday 00:00
+
+        def info() -> dict:
+            return json.loads(svc.wifi_schedule())["data"]["scheduleInfo"]
+
+        try:
+            _no_errors(svc.set_wifi_schedule([{"begin": begin, "end": begin + 60}], enable=False))
+            assert (info()["enable"], [(p["begin"], p["end"], p["state"]) for p in info()["schedule"]]) == (
+                False,
+                [(begin, begin + 60, "Disable")],
+            )
+            _no_errors(svc.enable_wifi_schedule())
+            assert info()["enable"] is True
+            _no_errors(svc.enable_wifi_schedule(False))
+            assert info()["enable"] is False
+            assert len(info()["schedule"]) == 1
+        finally:
+            if json.loads(svc.wifi_schedule()).get("status"):
+                svc.remove_wifi_schedule()
+        assert json.loads(svc.wifi_schedule())["status"] is False
 
 
 # ── Security ──────────────────────────────────────────────────────────────────
@@ -1274,6 +1465,34 @@ class TestE2EWifi:
         _no_errors(svc.set_guest_network(ssid=next(iter(guest.values()))["SSID"]))
         assert (_wifi_networks(svc), _payload(svc.guest())["Enable"]) == (before, guest_on)
 
+    @pytest.mark.parametrize("band", ["2.4GHz", "5GHz"])
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_channel_reverts(self, svc, sm, band):
+        """Write the band's channel setting back: its devices may reconnect, and the router may search for a channel."""
+        if not _runner_is_wired(sm):
+            pytest.skip("This machine isn't wired to the router, so it could lose its connection")
+        _, _, radio = svc._radio(band)
+        auto, bandwidth = radio["AutoChannelEnable"], radio.get("OperatingChannelBandwidth")
+        offered = {"2.4GHz": ("20MHz", "40MHz"), "5GHz": ("80MHz", "Auto")}[band]  # other widths are kept as they are
+        _no_errors(svc.set_channel(band, "auto" if auto else radio["Channel"], bandwidth if bandwidth in offered else None))
+        _, _, after = svc._radio(band)
+        assert (after["AutoChannelEnable"], after.get("OperatingChannelBandwidth")) == (auto, bandwidth)
+        if not auto:
+            assert after["Channel"] == radio["Channel"]
+
+    @pytest.mark.parametrize("band", ["2.4GHz", "5GHz"])
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_search_channel(self, svc, sm, band):
+        """Let the router choose the band's channel again: if it picks another one, its devices reconnect."""
+        if not _runner_is_wired(sm):
+            pytest.skip("This machine isn't wired to the router, so it could lose its connection")
+        if not svc._radio(band)[2]["AutoChannelEnable"]:
+            pytest.skip(f"The {band} channel is set by hand; not changing that")
+        _no_errors(svc.search_channel(band))
+        assert svc._radio(band)[2]["AutoChannelEnable"] is True
+
 
 # ── Wireguard ─────────────────────────────────────────────────────────────────
 
@@ -1291,6 +1510,52 @@ class TestE2EWireguard:
 
     def test_client_status(self, svc):
         _ok(svc.clients())
+
+    @pytest.mark.destructive
+    def test_client_add_set_delete(self, svc, sm):
+        """Add a dummy client, change it and delete it, leaving the other clients untouched. The server stays as it is."""
+        with _skip_if_unavailable():
+            before = _wireguard_clients(svc)
+        if not any(app.get("Enable") for app in json.loads(svc.app_status())["status"].values()):
+            pytest.skip("WireGuard isn't available on this router")
+        name, endpoint = "pyiboxe2e", f"{DUMMY_RULE}.example.com"
+        assert name not in before
+        server = _wireguard_server(svc)
+        lan_ip = json.loads(_make(NMC, sm).lan_ip())["data"]["Address"]
+        try:
+            config = json.loads(svc.add_client(name, endpoint=endpoint, intranet_access=False))["status"]
+            # Without printing the configuration: it contains the client's private key.
+            has_keys = "[Interface]" in config and "PrivateKey = " in config and "[Peer]" in config
+            has_endpoint = f"Endpoint = {endpoint}:" in config
+            assert has_keys
+            assert has_endpoint
+            client = _wireguard_clients(svc)[name]
+            assert (client[0], client[1], client[4]) == (True, False, f"{endpoint};{lan_ip}")
+            _no_errors(svc.set_client(name, enabled=False, intranet_access=True))
+            assert _wireguard_clients(svc)[name][:2] == (False, True)
+            _no_errors(svc.delete_client(name))
+        finally:
+            if name in _wireguard_clients(svc):
+                svc.delete_client(name)
+        assert _wireguard_clients(svc) == before
+        assert _wireguard_server(svc) == server
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_server_enabled_on_off(self, svc):
+        """Turn the WireGuard server on, then off again: meanwhile it accepts VPN connections. Skipped if it's on."""
+
+        def enabled() -> bool:
+            return any(server.get("Enable") for server in json.loads(svc.server_status())["status"].values())
+
+        if enabled():
+            pytest.skip("The WireGuard server is on; turning it off would disconnect VPN clients")
+        try:
+            _no_errors(svc.set_server_enabled(True))
+            assert enabled() is True
+        finally:
+            svc.set_server_enabled(False)
+        assert enabled() is False
 
 
 # ── WWAN ──────────────────────────────────────────────────────────────────────

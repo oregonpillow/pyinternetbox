@@ -89,7 +89,15 @@ ibox firewall set-port-forwarding minecraft 192.168.1.20 25565 --protocol tcp
 ibox devices block AA:BB:CC:DD:EE:FF
 ibox mst set AA:BB:CC:DD:EE:FF --minutes-per-day 120 --allowed-time '{"Sat": 240, "Sun": 240}'
 ibox wifi set-network --ssid MyHome --password 'Correct-Horse-9'
+ibox wifi set-channel 2.4GHz 6 --bandwidth 20MHz
+ibox firewall set-custom-rule Telnet 23 block --protocol tcp
 ibox dns set-device-servers 1.1.1.1,9.9.9.9
+```
+
+`ibox wireguard add-client` prints the new VPN client's configuration, with its private key. To save it for the WireGuard app:
+
+```sh
+ibox wireguard add-client phone --endpoint myhome.ddns.net | jq -r .status > phone.conf
 ```
 
 To save all settings to a file and load them back later, like the web interface's "Save Current Configuration" and "Restore Configuration" buttons (the phone book isn't included, and a restore leaves it as it is):
@@ -101,7 +109,7 @@ ibox nmc restore internetbox.cfg
 
 `ibox nmc backup-to-swisscom` uploads the settings to Swisscom, as the web interface does when you save a change. It only works if backup to Swisscom is turned on for your router; the web interface has no setting for it. The upload runs in the background for about a minute, and `ibox nmc network-config` shows its status.
 
-`ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), `ibox wifi set-enabled false`, `ibox wifi set-guest-enabled false`, `ibox wifi set-network` and `ibox wifi set-guest-network` cut connections, and `ibox voice clear-call-list` can't be undone, so they ask for confirmation first. Add `--yes` to skip the question in scripts.
+Commands that cut connections ask for confirmation first: `ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), turning Wi-Fi or the guest Wi-Fi off, changing Wi-Fi names, passwords or channels, turning on a Wi-Fi schedule, blocking outgoing traffic in the custom firewall and turning off the WireGuard VPN server. So does `ibox voice clear-call-list`, which can't be undone. Add `--yes` to skip the question in scripts.
 
 ### Library usage
 
@@ -379,13 +387,13 @@ uv run pytest tests/test_e2e.py -v
 # 💥 Only destructive tests
 uv run pytest tests/test_e2e.py -m destructive -v
 
-# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on)
+# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on, Wi-Fi channels, Wi-Fi schedule, VPN server on/off)
 IB_E2E_DISRUPTIVE=1 uv run pytest tests/test_e2e.py -m disruptive -v
 ```
 
-Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels), or create something temporary and delete it again: a disabled port forwarding rule named `pyinternetbox-e2e`, and a device entry, IP address reservation, access schedule and time limit for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host is set or the guest Wi-Fi is on.
+Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels, the custom firewall's basic actions, 6 GHz power saving), or create something temporary and delete it again: a disabled port forwarding rule, a disabled custom firewall rule and a DynDNS host that the router doesn't keep up to date, named after `pyinternetbox-e2e`, a WireGuard client named `pyiboxe2e`, a static route to the unused network `172.31.254.0/24`, and a device entry, IP address reservation, access schedule and time limit for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host, another DynDNS host or a Wi-Fi schedule is set, or the guest Wi-Fi is on.
 
-Tests that cut the network for everyone are skipped unless `IB_E2E_DISRUPTIVE=1` is set. The Wi-Fi off/on test also skips unless the machine running it is connected to the router by cable, since it couldn't turn Wi-Fi back on otherwise. Turning Wi-Fi off and on leaves the guest network off, so the test turns it back on if it was on.
+Tests that cut the network for everyone are skipped unless `IB_E2E_DISRUPTIVE=1` is set. The tests that turn Wi-Fi off and on or write the Wi-Fi names or channels back also skip unless the machine running them is connected to the router by cable, since it could lose its connection otherwise. Turning Wi-Fi off and on leaves the guest network off, so the test turns it back on if it was on.
 
 ## Related Projects
 

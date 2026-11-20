@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | Called by the web interface | 240 | 101 |
 | Functions exposed by the router (self-description) | 727 | 369 |
-| Implemented in pyinternetbox | 159 | 36 |
-| Web interface endpoints missing from pyinternetbox | 99 | 65 |
+| Implemented in pyinternetbox | 175 | 46 |
+| Web interface endpoints missing from pyinternetbox | 89 | 56 |
 | Writable parameters (generic `set`) on 315 objects | 1873 | 1873 |
 
 ## Endpoints used by the web interface
@@ -25,10 +25,15 @@
 | `DNS.Server.Cache:flush` | ✏️ | ✅ |  |
 | `Devices.Device.{id}:set` | ✏️ | ✅ | `parameters` |
 | `Devices:destroyDevice` | ✏️ | ✅ | `key` |
+| `DynDNS:addHost` | ✏️ | ✅ |  |
+| `DynDNS:delHost` | ✏️ | ✅ |  |
 | `Firewall:commit` | ✏️ | ✅ |  |
+| `Firewall:deleteCustomRule` | ✏️ | ✅ | `chain`, `id` |
 | `Firewall:deleteDMZ` | ✏️ | ✅ | `id` |
 | `Firewall:deletePortForwarding` | ✏️ | ✅ |  |
 | `Firewall:set` | ✏️ | ✅ | `UpnpPortForwardingEnable` |
+| `Firewall:setChainPolicy` | ✏️ | ✅ |  |
+| `Firewall:setCustomRule` | ✏️ | ✅ | `action`, `chain`, `description`, `destinationMAC`, `destinationPort`, `enable`, `id`, `ipversion`, `persistent`, `protocol`, `sourceMAC` |
 | `Firewall:setDMZ` | ✏️ | ✅ | `destinationIPAddress`, `enable`, `id`, `sourceInterface` |
 | `Firewall:setFirewallIPv6Level` | ✏️ | ✅ |  |
 | `Firewall:setFirewallLevel` | ✏️ | ✅ |  |
@@ -37,6 +42,8 @@
 | `NMC.DHCPv4.DNSServers.{id}:set` | ✏️ | ✅ | `DNSServers` |
 | `NMC.DHCPv6.DNSServers.{id}:set` | ✏️ | ✅ | `DNSServers` |
 | `NMC.Guest:set` | ✏️ | ✅ | `Enable` |
+| `NMC.LAN:addStaticRoute` | ✏️ | ✅ | `Dst`, `DstLen`, `Enable`, `Gateway`, `Name` |
+| `NMC.LAN:deleteStaticRoute` | ✏️ | ✅ |  |
 | `NMC.NetworkConfig:launchNetworkBackup` | ✏️ | ✅ |  |
 | `NMC.Wifi:set` | ✏️ | ✅ | `ConfigurationMode`, `Enable` |
 | `NMC.Wifi:setWPSEnable` | ✏️ | ✅ | `enable` |
@@ -45,9 +52,11 @@
 | `NMC.WlanTimer:setActivationTimer` | ✏️ | ✅ | `InterfaceName`, `Timeout` |
 | `NMC:reboot` | ✏️ | ✅ | `reason` |
 | `NeMo.Intf.{id}:setWLANConfig` | ✏️ | ✅ | `mibs` |
+| `NeMo.Intf.{id}:startAutoChannelSelection` | ✏️ | ✅ |  |
 | `Phonebook:addContactAndGenUUID` | ✏️ | ✅ | `contact`, `uniqueID` |
 | `Phonebook:modifyContactByUniqueID` | ✏️ | ✅ | `contact`, `uniqueID` |
 | `Phonebook:removeContactByUniqueID` | ✏️ | ✅ |  |
+| `PowerManagement:setTriggeredProfiles` | ✏️ | ✅ | `profiles` |
 | `SSW.DataElements.Network.SSID.{id}:set` | ✏️ | ✅ | `mibs` |
 | `Scheduler:addSchedule` | ✏️ | ✅ | `info`, `type` |
 | `Scheduler:enableSchedule` | ✏️ | ✅ | `ID`, `enable`, `type` |
@@ -79,6 +88,7 @@
 | `DynDNS:getHosts` |  | ✅ |  |
 | `DynDNS:getServices` |  | ✅ |  |
 | `Firewall:get` |  | ✅ |  |
+| `Firewall:getChainPolicy` |  | ✅ |  |
 | `Firewall:getCustomRule` |  | ✅ |  |
 | `Firewall:getDMZ` |  | ✅ |  |
 | `Firewall:getFirewallIPv6Level` |  | ✅ |  |
@@ -177,15 +187,8 @@
 | `Devices.Device.{id}.SSW:unpair` | ✏️ |  |  |
 | `Devices.Device.{id}:setName` | ✏️ |  | `name` |
 | `Devices.Device.{id}:unPair` | ✏️ |  |  |
-| `DynDNS:addHost` | ✏️ |  |  |
-| `DynDNS:delHost` | ✏️ |  |  |
-| `Firewall:deleteCustomRule` | ✏️ |  | `chain`, `id` |
-| `Firewall:setChainPolicy` | ✏️ |  |  |
-| `Firewall:setCustomRule` | ✏️ |  | `action`, `chain`, `description`, `destinationMAC`, `destinationPort`, `enable`, `id`, `ipversion`, `persistent`, `protocol`, `sourceMAC` |
 | `GenLog:clearLogs` | ✏️ |  | `source`, `topic` |
 | `NMC.Debug.DebugFile:set` | ✏️ |  | `GenerateFile` |
-| `NMC.LAN:addStaticRoute` | ✏️ |  | `Dst`, `DstLen`, `Enable`, `Gateway`, `Name` |
-| `NMC.LAN:deleteStaticRoute` | ✏️ |  |  |
 | `NMC.PhonebookBackup:set` | ✏️ |  | `OptIn`, `TriggerACS` |
 | `NMC.WWAN:set` | ✏️ |  | `EnableTethering` |
 | `NMC:changePassword` | ✏️ |  | `name`, `password` |
@@ -193,7 +196,6 @@
 | `NMC:set` | ✏️ |  | `GlobalEnableDect`, `GlobalEnableWiFi` |
 | `NeMo.Intf.{id}:set` | ✏️ |  | `Mode` |
 | `NeMo.Intf.{id}:setParameters` | ✏️ |  | `flag`, `name`, `traverse`, `value` |
-| `NeMo.Intf.{id}:startAutoChannelSelection` | ✏️ |  |  |
 | `NetMaster.LAN.default.Bridge.{id}:setIPv4` | ✏️ |  | `Address`, `DHCPEnable`, `DHCPMaxAddress`, `DHCPMinAddress`, `PrefixLength` |
 | `NetMaster.LAN.default.Bridge.{id}:setIPv6Configuration` | ✏️ |  | `DHCPIAPDEnable`, `Name` |
 | `NetMaster:set` | ✏️ |  | `EnableIPv6` |
@@ -202,7 +204,6 @@
 | `PasswordRecovery:start` | ✏️ |  |  |
 | `PasswordRecovery:stop` | ✏️ |  |  |
 | `PowerManagement:setScheduledProfiles` | ✏️ |  | `profiles` |
-| `PowerManagement:setTriggeredProfiles` | ✏️ |  | `profiles` |
 | `SSW.Steering.Device.{id}.APRoaming.Config:set` | ✏️ |  | `ForceBackhaul` |
 | `SSW.Steering.ExceptionList:createException` | ✏️ |  | `MAC`, `forceMode`, `mask`, `target`, `type` |
 | `SSW.Steering.ExceptionList:deleteException` | ✏️ |  |  |
@@ -239,7 +240,6 @@
 | `Devices.Device.{id}:deRegister` |  |  |  |
 | `Devices.Device.{id}:ring` |  |  |  |
 | `FMR5G.Devices.{id}:getResults` |  |  |  |
-| `Firewall:getChainPolicy` |  |  |  |
 | `NMC.Debug:generateWiFiLogs` |  |  |  |
 | `NMC.MCU:get` |  |  |  |
 | `NMC.WWAN.Gateway:get` |  |  |  |
@@ -559,8 +559,8 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 
 ### `DynDNS`
 
-- `addHost(service?, hostname?, username?, password?, enable?)` ✏️ 🌐
-- `delHost(hostname?)` ✏️ 🌐
+- `addHost(service?, hostname?, username?, password?, enable?)` ✏️ 🌐 ✅
+- `delHost(hostname?)` ✏️ 🌐 ✅
 - `getEnableOnCgnat()`
 - `getGlobalEnable()` ✅
 - `getHosts()` 🌐 ✅
@@ -581,7 +581,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 ### `Firewall`
 
 - `commit()` ✏️ 🌐 ✅
-- `deleteCustomRule(id, chain?)` ✏️ 🌐
+- `deleteCustomRule(id, chain?)` ✏️ 🌐 ✅
 - `deleteDMZ(id)` ✏️ 🌐 ✅
 - `deleteInterface(id)` ✏️
 - `deletePinhole(id?, origin)` ✏️
@@ -589,7 +589,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 - `deleteProtocolForwarding(id)` ✏️
 - `deleteRedirect(id)` ✏️
 - `enablePortForwarding(id, origin, enable)` ✏️
-- `getChainPolicy(chain)` 🌐
+- `getChainPolicy(chain)` 🌐 ✅
 - `getCustomRule(id?, chain?)` 🌐 ✅
 - `getDMZ(id?)` 🌐 ✅
 - `getFirewallIPv6Level()` 🌐 ✅
@@ -605,8 +605,8 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 - `getSpecificPortForwarding(index?, destinationIPAddress?, sourcePort?, protocol?, sourceInterface?)`
 - `refreshPortForwarding(id, origin, description?, persistent?, leaseDuration?)` ✏️
 - `save()` ✏️
-- `setChainPolicy(chain, policy)` ✏️ 🌐
-- `setCustomRule(id?, chain?, action, destinationPort?, sourcePort?, destinationPrefix?, sourcePrefix?, protocol?, ipversion?, enable?, description?, destinationMAC?, sourceMAC?, persistent?)` ✏️ 🌐
+- `setChainPolicy(chain, policy)` ✏️ 🌐 ✅
+- `setCustomRule(id?, chain?, action, destinationPort?, sourcePort?, destinationPrefix?, sourcePrefix?, protocol?, ipversion?, enable?, description?, destinationMAC?, sourceMAC?, persistent?)` ✏️ 🌐 ✅
 - `setDMZ(id?, sourceInterface, destinationIPAddress, sourcePrefix?, enable)` ✏️ 🌐 ✅
 - `setFirewallIPv6Level(level)` ✏️ 🌐 ✅
 - `setFirewallLevel(level)` ✏️ 🌐 ✅
@@ -963,8 +963,8 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 
 ### `NMC.LAN`
 
-- `addStaticRoute(Name, Dst, DstLen, Gateway, Enable?, Priority?, MTU?)` ✏️ 🌐
-- `deleteStaticRoute(Name)` ✏️ 🌐
+- `addStaticRoute(Name, Dst, DstLen, Gateway, Enable?, Priority?, MTU?)` ✏️ 🌐 ✅
+- `deleteStaticRoute(Name)` ✏️ 🌐 ✅
 - `getStaticRoutes()` 🌐 ✅
 
 ### `NMC.LAN.IPv4Route`
@@ -1545,7 +1545,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 - `setScheduledProfilesOverride(overrides)` ✏️
 - `setSchedulers(profiles)` ✏️
 - `setState(ID, state)` ✏️
-- `setTriggeredProfiles(profiles)` ✏️ 🌐
+- `setTriggeredProfiles(profiles)` ✏️ 🌐 ✅
 - Writable parameters: `Enable` (bool), `InformRandomDelay` (uint32)
 
 ### `SSW`
@@ -2345,7 +2345,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 
 ### `WireGuard.Server.default.Client.{id}`
 
-- `GeneratePrivateKeyAndGetQRConfig()`
+- `GeneratePrivateKeyAndGetQRConfig()` ✅
 - Writable parameters: `Alias` (string), `Enable` (bool), `ExtraData` (string), `IntranetAccess` (bool), `PreSharedKey` (string), `PublicKey` (string)
 
 ### `WireGuard.Server.default.Client.{id}.Error`

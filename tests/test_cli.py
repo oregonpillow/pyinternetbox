@@ -29,6 +29,13 @@ _COMMANDS = [
     ("nmc", "restore"),
     ("voice", "clear_call_list"),
     ("dns", "set_device_servers"),
+    ("wifi", "set_channel"),
+    ("wifi", "search_channel"),
+    ("scheduler", "set_wifi_schedule"),
+    ("scheduler", "enable_wifi_schedule"),
+    ("firewall", "set_custom_rule"),
+    ("firewall", "set_custom_policy"),
+    ("wireguard", "set_server_enabled"),
 ]
 
 
@@ -72,11 +79,57 @@ def test_base_type(annotation: object, expected: object) -> None:
         ("5", list, ["5"]),
         ("7", int, 7),
         ("tcp", Literal["tcp", "udp"], "tcp"),
+        ("6", Literal[4, 6], 6),
         ("text", str, "text"),
+        ("52", int | Literal["auto"], 52),
+        ("auto", int | Literal["auto"], "auto"),
+        ("auto", int | Literal["auto"] | None, "auto"),
     ],
 )
 def test_coerce_value(value: str, annotation: object, expected: object) -> None:
     assert cli._coerce_value(value, annotation) == expected
+
+
+@pytest.mark.parametrize("value", ["Auto", "x", "5.5", ""])
+def test_coerce_union_rejects_other_values(value: str) -> None:
+    with pytest.raises(ValueError, match=f"Expected a whole number or 'auto', got {value!r}"):
+        cli._coerce_value(value, int | Literal["auto"])
+
+
+def test_union_argument(client: MagicMock) -> None:
+    assert runner.invoke(cli.app, ["wifi", "set-channel", "2.4GHz", "auto", "--bandwidth", "20MHz", "--yes"]).exit_code == 0
+    client.wifi.set_channel.assert_called_once_with(band="2.4GHz", channel="auto", bandwidth="20MHz")
+
+
+def test_union_argument_rejects_other_values(client: MagicMock) -> None:
+    result = runner.invoke(cli.app, ["wifi", "set-channel", "5GHz", "fast", "--yes"])
+    assert result.exit_code == 2
+    assert "Expected a whole number or 'auto', got 'fast'" in result.output
+    client.wifi.set_channel.assert_not_called()
+
+
+def test_union_argument_help_shows_values() -> None:
+    assert "Channel (a whole number or 'auto')" in runner.invoke(cli.app, ["wifi", "set-channel", "--help"]).output
+
+
+def test_int_choice_option(client: MagicMock) -> None:
+    args = [
+        "firewall",
+        "set-custom-rule",
+        "SSH",
+        "22",
+        "allow",
+        "--ip-version",
+        "6",
+        "--direction",
+        "inbound",
+        "--device",
+        "02:00:00:00:00:01",
+    ]
+    assert runner.invoke(cli.app, args).exit_code == 0
+    client.firewall.set_custom_rule.assert_called_once_with(
+        name="SSH", port="22", action="allow", ip_version=6, direction="inbound", protocol="both", device="02:00:00:00:00:01", enabled=True
+    )
 
 
 @pytest.mark.parametrize("value,expected", [("false", False), ("true", True)])
@@ -188,6 +241,27 @@ _CONFIRMED = [
         {"ssid": None, "password": "Guest-Password-1"},
     ),
     (["voice", "clear-call-list"], "Delete all calls from the call list?", "voice.clear_call_list", {}),
+    (
+        ["wifi", "set-channel", "5GHz", "52"],
+        "Change the Wi-Fi channel?",
+        "wifi.set_channel",
+        {"band": "5GHz", "channel": 52, "bandwidth": None},
+    ),
+    (["wifi", "search-channel", "2.4GHz"], "Let the router choose a new Wi-Fi channel now?", "wifi.search_channel", {"band": "2.4GHz"}),
+    (
+        ["scheduler", "set-wifi-schedule", '[{"begin": "Mon 01:00", "end": "Mon 06:00"}]'],
+        "Turn Wi-Fi off on a schedule?",
+        "scheduler.set_wifi_schedule",
+        {"off_periods": [{"begin": "Mon 01:00", "end": "Mon 06:00"}], "enable": True},
+    ),
+    (["scheduler", "enable-wifi-schedule"], "Turn on the Wi-Fi schedule?", "scheduler.enable_wifi_schedule", {"enable": True}),
+    (
+        ["firewall", "set-custom-policy", "block"],
+        "Block all outgoing traffic that no custom rule allows?",
+        "firewall.set_custom_policy",
+        {"action": "block", "ip_version": 4, "direction": "outbound"},
+    ),
+    (["wireguard", "set-server-enabled", "false"], "Turn off the WireGuard VPN server?", "wireguard.set_server_enabled", {"enable": False}),
 ]
 
 
@@ -226,6 +300,25 @@ def test_turning_wifi_on_doesnt_ask(client: MagicMock, args: list[str], method: 
     assert result.exit_code == 0
     assert "Turn off" not in result.output
     getattr(client.wifi, method).assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "args,method",
+    [
+        (["scheduler", "set-wifi-schedule", '[{"begin": "Mon 01:00", "end": "Mon 06:00"}]', "--no-enable"], "scheduler.set_wifi_schedule"),
+        (["scheduler", "set-wifi-schedule", "[]"], "scheduler.set_wifi_schedule"),
+        (["scheduler", "enable-wifi-schedule", "--no-enable"], "scheduler.enable_wifi_schedule"),
+        (["firewall", "set-custom-policy", "allow"], "firewall.set_custom_policy"),
+        (["firewall", "set-custom-policy", "block", "--ip-version", "6", "--direction", "inbound"], "firewall.set_custom_policy"),
+        (["wireguard", "set-server-enabled", "true"], "wireguard.set_server_enabled"),
+    ],
+)
+def test_harmless_variants_dont_ask(client: MagicMock, args: list[str], method: str) -> None:
+    """Wi-Fi stays on, blocking inbound traffic doesn't cut anyone off the internet, and the VPN server goes on."""
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0
+    assert "?" not in result.output
+    operator.attrgetter(method)(client).assert_called_once()
 
 
 def test_disruptive_commands_ask_first() -> None:

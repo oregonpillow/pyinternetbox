@@ -61,6 +61,31 @@ def _make_resource(cls: type, sm: MagicMock):
     return obj
 
 
+def _answering(sm: MagicMock, answers: dict[str, object], default: str = '{"status": true}') -> None:
+    """Let the mock router answer by endpoint. A list is answered in turn; an exception is raised."""
+
+    def post(endpoint: str, data: dict | None = None, auth_required: bool = True) -> str:
+        answer = answers.get(endpoint, default)
+        if isinstance(answer, list):
+            answer = answer.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    sm.post.side_effect = post
+
+
+def _sent(sm: MagicMock, reads: tuple[str, ...] = (":get", ":_get")) -> list[tuple]:
+    """The (endpoint, data) of each request, except to functions ending with one of *reads*."""
+    return [c[0][:2] for c in sm.post.call_args_list if not c[0][0].endswith(reads)]
+
+
+def _http_error(status: int) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(f"{status} Server Error", response=response)
+
+
 def test_sysbus_paths_use_slashes() -> None:
     """The router drops the connection for a path like /sysbus/VoiceService.VoiceApplication:listTrunks."""
     source = "".join(path.read_text() for path in pathlib.Path(resources.__file__).parent.glob("*.py"))
@@ -530,6 +555,98 @@ class TestDynDNS:
         assert mock_session_manager.post.call_args[0][0] == endpoint
 
 
+class TestDynDNSHosts:
+    """set_host() and delete_host(), against a router with Swisscom's own host."""
+
+    SWISSCOM = {"service": "Swisscom", "hostname": "home.swisscom.example", "username": "sc", "password": "swisscom-secret", "enable": True}
+    NO_IP = {"service": "No-IP", "hostname": "old.ddns.net", "username": "me", "password": "Old-password-1", "enable": True}
+    NEW = {"service": "No-IP", "hostname": "myhome.ddns.net", "username": "me", "password": "New-password-2", "enable": True}
+    READS = (":getHosts", ":getServices")
+
+    @staticmethod
+    def _dyndns(sm: MagicMock, hosts: list[dict], add: object = '{"status": true}') -> DynDNS:
+        services = json.dumps({"status": ["Swisscom", "dyndns", "No-IP"]})
+        _answering(
+            sm,
+            {
+                "/sysbus/DynDNS:getHosts": json.dumps({"status": hosts}),
+                "/sysbus/DynDNS:getServices": services,
+                "/sysbus/DynDNS:addHost": add,
+            },
+        )
+        return _make_resource(DynDNS, sm)
+
+    def test_set_host_keeps_the_others(self, mock_session_manager: MagicMock) -> None:
+        svc = self._dyndns(mock_session_manager, [self.SWISSCOM])
+        assert svc.set_host("No-IP", "myhome.ddns.net", "me", "New-password-2") == '{"status": true}'
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/DynDNS:addHost", {"parameters": self.NEW})]
+
+    def test_set_host_replaces_same_service_and_same_hostname(self, mock_session_manager: MagicMock) -> None:
+        same_name = {**self.NO_IP, "service": "dyndns", "hostname": "MyHome.ddns.net"}
+        svc = self._dyndns(mock_session_manager, [self.SWISSCOM, self.NO_IP, same_name])
+        svc.set_host("No-IP", "myhome.ddns.net", "me", "New-password-2", enable=False)
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/DynDNS:delHost", {"parameters": {"hostname": "old.ddns.net"}}),
+            ("/sysbus/DynDNS:delHost", {"parameters": {"hostname": "MyHome.ddns.net"}}),
+            ("/sysbus/DynDNS:addHost", {"parameters": {**self.NEW, "enable": False}}),
+        ]
+
+    @pytest.mark.parametrize("add", [[_http_error(500), '{"status": true}'], ['{"status": false}', '{"status": true}']])
+    def test_set_host_puts_the_old_host_back_when_the_router_refuses(self, mock_session_manager: MagicMock, add: list) -> None:
+        old = {**self.NO_IP, "status": "UPDATED", "last_update": "2026-11-20T10:00:00Z"}
+        svc = self._dyndns(mock_session_manager, [old], add=add)
+        with pytest.raises((requests.HTTPError, ValueError)):
+            svc.set_host("No-IP", "myhome.ddns.net", "me", "New-password-2")
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/DynDNS:delHost", {"parameters": {"hostname": "old.ddns.net"}}),
+            ("/sysbus/DynDNS:addHost", {"parameters": self.NEW}),
+            ("/sysbus/DynDNS:addHost", {"parameters": self.NO_IP}),
+        ]
+
+    @pytest.mark.parametrize(
+        "kwargs,message",
+        [
+            ({"service": "Swisscom"}, "set up by Swisscom"),
+            ({"service": "Unknown"}, r"service must be one of \['dyndns', 'No-IP'\]"),
+            ({"hostname": "home.swisscom.example"}, "is Swisscom's DynDNS host"),
+            ({"hostname": "ab"}, "hostname must be a host name of 3 to 63"),
+            ({"hostname": "myhome"}, "hostname must be"),
+            ({"hostname": "1home.ddns.net"}, "hostname must be"),
+            ({"hostname": "my_home.ddns.net"}, "hostname must be"),
+            ({"hostname": "x" * 60 + ".net"}, "hostname must be"),
+            ({"username": ""}, "username must be 1 to 63"),
+            ({"username": "Jürg"}, "username must be"),
+            ({"password": "Short-1"}, "password must be 12 to 63"),
+            ({"password": "Pässword-long-1"}, "password must be"),
+        ],
+    )
+    def test_set_host_refuses(self, mock_session_manager: MagicMock, kwargs: dict, message: str) -> None:
+        svc = self._dyndns(mock_session_manager, [self.SWISSCOM])
+        arguments = {"service": "No-IP", "hostname": "myhome.ddns.net", "username": "me", "password": "New-password-2", **kwargs}
+        with pytest.raises(ValueError, match=message) as error:
+            svc.set_host(**arguments)
+        assert arguments["password"] not in str(error.value)
+        assert _sent(mock_session_manager, self.READS) == []
+
+    def test_delete_host(self, mock_session_manager: MagicMock) -> None:
+        svc = self._dyndns(mock_session_manager, [self.SWISSCOM, self.NO_IP])
+        svc.delete_host("OLD.ddns.net")
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/DynDNS:delHost", {"parameters": {"hostname": "old.ddns.net"}})]
+
+    @pytest.mark.parametrize(
+        "hostname,message",
+        [
+            ("home.swisscom.example", "is Swisscom's DynDNS host"),
+            ("other.ddns.net", "no DynDNS host 'other.ddns.net'. The hosts are: 'home"),
+        ],
+    )
+    def test_delete_host_refuses(self, mock_session_manager: MagicMock, hostname: str, message: str) -> None:
+        svc = self._dyndns(mock_session_manager, [self.SWISSCOM])
+        with pytest.raises(ValueError, match=message):
+            svc.delete_host(hostname)
+        assert _sent(mock_session_manager, self.READS) == []
+
+
 # ── Events ────────────────────────────────────────────────────────────
 
 
@@ -704,6 +821,267 @@ class TestFirewall:
             "/sysbus/Firewall:setDMZ",
             {"parameters": {"id": "webui", "sourceInterface": "data", "destinationIPAddress": "192.168.1.20", "enable": True}},
         )
+
+
+def _custom_rule(rule_id: str, name: str, port: str, target: str = "Drop", protocol: str = "6", mac: str = "", **fields: object) -> dict:
+    """A custom rule as the router stores it. Inbound IPv6 rules use DestinationMACAddress instead."""
+    rule = {"Id": rule_id, "Target": target, "Status": "Disabled", "Class": "Forward", "IPVersion": 4, "Protocol": protocol}
+    rule |= {"DestinationPort": port, "SourcePort": "", "DestinationMACAddress": "", "SourceMACAddress": mac, "DestinationPrefix": ""}
+    return rule | {"SourcePrefix": "", "TargetChain": "", "Description": name, "Enable": True, **fields}
+
+
+class TestFirewallCustomRules:
+    """Custom rules and chain policies, against a router with an IPv4 rule blocking Telnet."""
+
+    TELNET = _custom_rule("1700000000000_1", "Telnet", "23")
+    STAMP = 1763600000.123  # time.time() for new rule IDs: 1763600000123_1
+    READS = (":getCustomRule", ":getChainPolicy")
+
+    @staticmethod
+    def _firewall(sm: MagicMock, rules: dict[str, dict] | None = None, policies: dict[str, str] | None = None) -> Firewall:
+        policies = {"Custom": "Accept", "Custom_V6Out": "Accept", "Custom_V6In": "Drop", **(policies or {})}
+
+        def post(endpoint: str, data: dict | None = None, auth_required: bool = True) -> str:
+            parameters = (data or {}).get("parameters") or {}
+            if endpoint.endswith(":getCustomRule"):
+                return json.dumps({"status": (rules or {}).get(parameters.get("chain", "Custom"), {})})
+            if endpoint.endswith(":getChainPolicy"):
+                return json.dumps({"status": policies[parameters["chain"]]})
+            if endpoint.endswith(":setCustomRule"):
+                return json.dumps({"status": parameters["id"]})
+            return '{"status": true}'
+
+        sm.post.side_effect = post
+        return _make_resource(Firewall, sm)
+
+    @staticmethod
+    def _rule(rule_id: str, chain: str, name: str, port: str, action: str, protocol: str = "6,17", version: int = 4, **mac: str) -> dict:
+        """The setCustomRule parameters for a rule."""
+        mac = mac or {"destinationMAC" if chain == "Custom_V6In" else "sourceMAC": ""}
+        parameters = {"id": rule_id, "chain": chain, "description": name, "action": action, "ipversion": version, "protocol": protocol}
+        return {"parameters": {**parameters, "destinationPort": port, **mac, "enable": True, "persistent": True}}
+
+    def test_custom_rule_of_a_chain(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.custom_rule("Custom_V6In")
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/Firewall:getCustomRule", {"parameters": {"chain": "Custom_V6In"}})
+
+    def test_custom_rules(self, mock_session_manager: MagicMock) -> None:
+        ssh = _custom_rule(
+            "1700000000000_2", "SSH", "22-23", target="Accept", protocol="6,17", IPVersion=6, DestinationMACAddress="AA:BB:CC:DD:EE:FF"
+        )
+        unnamed = _custom_rule("old-rule", "", "5000", protocol="17", mac="11:22:33:44:55:66", Enable=False)
+        svc = self._firewall(
+            mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET, "old-rule": unnamed}, "Custom_V6In": {"1700000000000_2": ssh}}
+        )
+        common = {"ip_version": 4, "direction": "outbound", "chain": "Custom"}
+        assert json.loads(svc.custom_rules()) == [
+            {
+                "name": "Telnet",
+                "port": "23",
+                "action": "block",
+                "protocol": "tcp",
+                "device": None,
+                "enabled": True,
+                "id": "1700000000000_1",
+                **common,
+            },
+            {
+                "name": "old-rule",
+                "port": "5000",
+                "action": "block",
+                "protocol": "udp",
+                "device": "11:22:33:44:55:66",
+                "enabled": False,
+                "id": "old-rule",
+                **common,
+            },
+            {
+                "name": "SSH",
+                "port": "22-23",
+                "action": "allow",
+                "ip_version": 6,
+                "direction": "inbound",
+                "protocol": "both",
+                "device": "AA:BB:CC:DD:EE:FF",
+                "enabled": True,
+                "id": "1700000000000_2",
+                "chain": "Custom_V6In",
+            },
+        ]
+
+    def test_add_rule(self, mock_session_manager: MagicMock) -> None:
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET}})
+        with patch("internetbox_client.resources.firewall.time.time", return_value=self.STAMP):
+            result = svc.set_custom_rule("Games", "27000-27050", "allow", protocol="udp", device="02-00-00-00-00-01", enabled=False)
+        expected = self._rule("1763600000123_1", "Custom", "Games", "27000-27050", "Accept", protocol="17", sourceMAC="02:00:00:00:00:01")
+        expected["parameters"]["enable"] = False
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/Firewall:setCustomRule", expected),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+        assert result == '{"status": "1763600000123_1"}'
+
+    @pytest.mark.parametrize(
+        "direction,chain,mac",
+        [
+            ("outbound", "Custom_V6Out", {"sourceMAC": "02:00:00:00:00:01"}),
+            ("inbound", "Custom_V6In", {"destinationMAC": "02:00:00:00:00:01"}),
+        ],
+    )
+    def test_ipv6_rules(self, mock_session_manager: MagicMock, direction: str, chain: str, mac: dict) -> None:
+        svc = self._firewall(mock_session_manager)
+        with patch("internetbox_client.resources.firewall.time.time", return_value=self.STAMP):
+            svc.set_custom_rule("SSH", 22, "allow", ip_version=6, direction=direction, device="02:00:00:00:00:01")
+        assert _sent(mock_session_manager, self.READS)[0] == (
+            "/sysbus/Firewall:setCustomRule",
+            self._rule("1763600000123_1", chain, "SSH", "22", "Accept", version=6, **mac),
+        )
+
+    def test_new_id_differs_from_existing_ids(self, mock_session_manager: MagicMock) -> None:
+        taken = _custom_rule("1763600000123_1", "Other", "80")
+        svc = self._firewall(mock_session_manager, {"Custom": {"1763600000123_1": taken}})
+        with patch("internetbox_client.resources.firewall.time.time", return_value=self.STAMP):
+            svc.set_custom_rule("Games", "27000", "block", protocol="udp")
+        assert _sent(mock_session_manager, self.READS)[0][1]["parameters"]["id"] == "1763600000123_2"
+
+    @pytest.mark.parametrize(
+        "kwargs,chain,version", [({}, "Custom", 4), ({"ip_version": 6}, "Custom_V6Out", 6)], ids=["same chain", "another chain"]
+    )
+    def test_changing_a_rule_replaces_it(self, mock_session_manager: MagicMock, kwargs: dict, chain: str, version: int) -> None:
+        """Like the web UI. The new rule comes first, so the old one stays if it fails. It doesn't overlap the old one."""
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET}})
+        with patch("internetbox_client.resources.firewall.time.time", return_value=self.STAMP):
+            result = svc.set_custom_rule("Telnet", "23-24", "block", **kwargs)
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/Firewall:setCustomRule", self._rule("1763600000123_1", chain, "Telnet", "23-24", "Drop", version=version)),
+            ("/sysbus/Firewall:deleteCustomRule", {"parameters": {"id": "1700000000000_1", "chain": "Custom"}}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+        assert result == '{"status": "1763600000123_1"}'
+
+    def test_changing_a_rule_that_the_router_refuses_keeps_the_old_one(self, mock_session_manager: MagicMock) -> None:
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET}})
+        answer = mock_session_manager.post.side_effect
+
+        def post(endpoint: str, *args: object) -> str:
+            if endpoint.endswith(":setCustomRule"):
+                raise _http_error(500)
+            return answer(endpoint, *args)
+
+        mock_session_manager.post.side_effect = post
+        with pytest.raises(requests.HTTPError):
+            svc.set_custom_rule("Telnet", "23-24", "block")
+        assert [endpoint for endpoint, _ in _sent(mock_session_manager, self.READS)] == ["/sysbus/Firewall:setCustomRule"]
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"port": "23", "protocol": "udp"},  # other protocol
+            {"port": "24"},  # other port
+            {"port": "23", "ip_version": 6},  # other chain
+            {"port": "23", "device": "02:00:00:00:00:02"},  # other device than the rule's
+        ],
+    )
+    def test_rules_that_dont_overlap(self, mock_session_manager: MagicMock, kwargs: dict) -> None:
+        telnet = _custom_rule("1700000000000_1", "Telnet", "23", mac="02:00:00:00:00:01")
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": telnet}})
+        svc.set_custom_rule("New", action="block", **kwargs)
+        assert _sent(mock_session_manager, self.READS)[-1] == ("/sysbus/Firewall:commit", {"parameters": {}})
+
+    @pytest.mark.parametrize(
+        "kwargs,message",
+        [
+            ({"port": "20-30"}, "overlaps the custom rule 'Telnet' \\(port 23\\)"),
+            ({"port": "23", "action": "allow", "protocol": "tcp"}, "contradicts the custom rule 'Telnet'"),
+            ({"port": "23", "device": "02:00:00:00:00:01"}, "overlaps"),  # the Telnet rule is for all devices
+            ({"port": "1-65535", "action": "block", "protocol": "udp"}, "same action as the basic action"),
+            ({"port": "80", "direction": "inbound"}, "IPv4 custom rules are outbound only"),
+            ({"port": "80", "ip_version": 5}, "ip_version must be 4 or 6"),
+            ({"port": "80", "direction": "both"}, 'direction must be "outbound" or "inbound"'),
+            ({"port": "80", "action": "deny"}, 'action must be "allow" or "block"'),
+            ({"port": "80", "protocol": "icmp"}, "protocol must be one of"),
+            ({"port": "80", "name": ""}, "name must be 1 to 40"),
+            ({"port": "80", "name": " "}, "name must be 1 to 40"),
+            ({"port": "80", "name": "x" * 41}, "name must be 1 to 40"),
+            ({"port": "80", "name": "Café"}, "name must be 1 to 40"),
+            ({"port": "0"}, "between 1 and 65535"),
+            ({"port": "65536"}, "between 1 and 65535"),
+            ({"port": "8010-8000"}, "from a lower to a higher port"),
+            ({"port": "80-80"}, "from a lower to a higher port"),
+            ({"port": "http"}, "port must be a port such as 443"),
+            ({"port": "80", "device": "phone"}, "Not a MAC address"),
+        ],
+    )
+    def test_refuses(self, mock_session_manager: MagicMock, kwargs: dict, message: str) -> None:
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET}})
+        with pytest.raises(ValueError, match=message):
+            svc.set_custom_rule(**{"name": "New", "action": "block", **kwargs})
+        assert _sent(mock_session_manager, self.READS) == []
+
+    @pytest.mark.parametrize("policy,action", [("Accept", "allow"), ("Drop", "block")])
+    def test_all_ports_with_the_basic_action(self, mock_session_manager: MagicMock, policy: str, action: str) -> None:
+        svc = self._firewall(mock_session_manager, policies={"Custom_V6Out": policy})
+        svc.set_custom_rule("All", "1-65535", action, ip_version=6)
+        assert _sent(mock_session_manager, self.READS)[0][1]["parameters"]["destinationPort"] == "1-65535"
+
+    def test_enable_custom_rule_keeps_its_settings(self, mock_session_manager: MagicMock) -> None:
+        """Including settings the web UI can't make, e.g. a source prefix."""
+        rule = _custom_rule(
+            "1700000000000_2",
+            "Mail",
+            "25",
+            protocol="6",
+            IPVersion=6,
+            SourcePrefix="2001:db8::/64",
+            DestinationMACAddress="02:00:00:00:00:01",
+        )
+        svc = self._firewall(mock_session_manager, {"Custom_V6In": {"1700000000000_2": rule}})
+        svc.enable_custom_rule("Mail", False)
+        expected = self._rule(
+            "1700000000000_2", "Custom_V6In", "Mail", "25", "Drop", protocol="6", version=6, destinationMAC="02:00:00:00:00:01"
+        )
+        expected["parameters"] |= {"enable": False, "sourcePrefix": "2001:db8::/64"}
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/Firewall:setCustomRule", expected),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    def test_delete_custom_rule(self, mock_session_manager: MagicMock) -> None:
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET}})
+        svc.delete_custom_rule("Telnet")
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/Firewall:deleteCustomRule", {"parameters": {"id": "1700000000000_1", "chain": "Custom"}}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    @pytest.mark.parametrize("method", ["enable_custom_rule", "delete_custom_rule"])
+    def test_unknown_rule(self, mock_session_manager: MagicMock, method: str) -> None:
+        svc = self._firewall(mock_session_manager, {"Custom": {"1700000000000_1": self.TELNET}})
+        with pytest.raises(ValueError, match="no custom firewall rule named 'SSH'. The rules are: 'Telnet'"):
+            getattr(svc, method)("SSH")
+        assert _sent(mock_session_manager, self.READS) == []
+
+    @pytest.mark.parametrize("ipv4", ["Drop", "None", ""])
+    def test_custom_policy(self, mock_session_manager: MagicMock, ipv4: str) -> None:
+        """Like the web UI, a chain without a policy allows."""
+        svc = self._firewall(mock_session_manager, policies={"Custom": ipv4})
+        expected = {"ipv4": "block" if ipv4 == "Drop" else "allow", "ipv6_outbound": "allow", "ipv6_inbound": "block"}
+        assert json.loads(svc.custom_policy()) == expected
+
+    def test_set_custom_policy(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_custom_policy("block", ip_version=6, direction="inbound")
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Firewall:setChainPolicy",
+            {"parameters": {"chain": "Custom_V6In", "policy": "Drop"}},
+        )
+
+    @pytest.mark.parametrize("kwargs", [{"action": "deny"}, {"action": "block", "direction": "inbound"}])
+    def test_set_custom_policy_refuses(self, mock_session_manager: MagicMock, kwargs: dict) -> None:
+        with pytest.raises(ValueError):
+            _make_resource(Firewall, mock_session_manager).set_custom_policy(**kwargs)
+        mock_session_manager.post.assert_not_called()
 
 
 # ── GenLog ────────────────────────────────────────────────────────────
@@ -923,6 +1301,122 @@ class TestNMC:
         with pytest.raises(ValueError, match="Backup to Swisscom isn't turned on for this router"):
             _make_resource(NMC, mock_session_manager).backup_to_swisscom()
         mock_session_manager.post.assert_called_once()  # the status, but no upload
+
+
+class TestStaticRoutes:
+    """set_static_route() and delete_static_route(), on a router with the LAN 192.168.1.0/24 and WireGuard clients in
+    10.0.1.0/24."""
+
+    LAB = {"Enable": True, "Status": "Enabled", "DstLen": 24, "Dst": "192.168.10.0", "Priority": 0, "Gateway": "192.168.1.2", "MTU": 0}
+    READS = (":getLANIP", ":getStaticRoutes", ":_get", ":getPortForwarding")
+
+    @staticmethod
+    def _nmc(sm: MagicMock, routes: dict[str, dict] | None = None, wireguard: object = None, forwards: dict | None = None) -> NMC:
+        servers = {"WireGuard.Server.1.": {"SubnetIPv4": "10.0.1.0/24", "Enable": False}, "WireGuard.Server.": {}}
+        _answering(
+            sm,
+            {
+                "/sysbus/NMC:getLANIP": json.dumps({"status": None, "data": {"Address": "192.168.1.1", "Netmask": "255.255.255.0"}}),
+                "/sysbus/NMC/LAN:getStaticRoutes": json.dumps({"status": routes or {}}),
+                "/sysbus/WireGuard/Server:_get": wireguard if wireguard is not None else json.dumps({"status": servers}),
+                "/sysbus/Firewall:getPortForwarding": json.dumps({"status": forwards or {}}),
+            },
+            default='{"status": null}',
+        )
+        return _make_resource(NMC, sm)
+
+    def test_add_route(self, mock_session_manager: MagicMock) -> None:
+        svc = self._nmc(mock_session_manager)
+        with patch("internetbox_client.resources.nmc.random.randrange", return_value=123456):
+            assert svc.set_static_route(" 192.168.10.0/24", "192.168.1.2 ") == '{"status": null}'
+        settings = {"Name": "webui_123456", "Dst": "192.168.10.0", "DstLen": 24, "Gateway": "192.168.1.2", "Enable": True}
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/NMC/LAN:addStaticRoute", {"parameters": settings})]
+
+    def test_new_name_differs_from_existing_names(self, mock_session_manager: MagicMock) -> None:
+        svc = self._nmc(mock_session_manager, {"webui_1": self.LAB})
+        with patch("internetbox_client.resources.nmc.random.randrange", side_effect=[1, 2]):
+            svc.set_static_route("172.16.0.0/16", "192.168.1.3")
+        assert _sent(mock_session_manager, self.READS)[0][1]["parameters"]["Name"] == "webui_2"
+
+    def test_changing_the_gateway_keeps_the_route(self, mock_session_manager: MagicMock) -> None:
+        """The route to the same network doesn't overlap itself."""
+        svc = self._nmc(mock_session_manager, {"webui_1": self.LAB})
+        svc.set_static_route("192.168.10.0/24", "192.168.1.3")
+        settings = {"Dst": "192.168.10.0", "DstLen": 24, "Gateway": "192.168.1.3", "Enable": True}
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/NMC/LAN/IPv4Route/webui_1:set", {"parameters": settings})]
+
+    def test_without_wireguard(self, mock_session_manager: MagicMock) -> None:
+        """Routers without WireGuard answer with an error: the WireGuard clients' network then isn't checked."""
+        svc = self._nmc(mock_session_manager, wireguard=_http_error(500))
+        svc.set_static_route("10.0.1.0/24", "192.168.1.2")
+        assert _sent(mock_session_manager, self.READS)[0][0] == "/sysbus/NMC/LAN:addStaticRoute"
+
+    @pytest.mark.parametrize(
+        "destination,gateway,message",
+        [
+            ("192.168.10.0", "192.168.1.2", 'destination must be a network such as "192.168.10.0/24"'),
+            ("192.168.10.0/33", "192.168.1.2", "destination must be a network"),
+            ("lab", "192.168.1.2", "destination must be a network"),
+            ("10.0.0.0/8", "192.168.1.2", "prefix length from /16 to /28"),
+            ("192.168.10.0/29", "192.168.1.2", "prefix length from /16 to /28"),
+            ("192.168.10.5/24", "192.168.1.2", "isn't the address of its network: did you mean 192.168.10.0/24"),
+            ("8.8.0.0/16", "192.168.1.2", "isn't a private network"),
+            ("192.168.1.0/24", "192.168.1.2", r"overlaps your network \(192.168.1.0/24\)"),
+            ("192.168.0.0/16", "192.168.1.2", "overlaps your network"),
+            ("10.128.5.0/24", "192.168.1.2", "overlaps the guest Wi-Fi"),
+            ("10.129.0.0/16", "192.168.1.2", "overlaps the router's apbridge network"),
+            ("10.0.1.0/24", "192.168.1.2", r"overlaps the WireGuard clients' network \(10.0.1.0/24\)"),
+            ("192.168.10.128/25", "192.168.1.2", r"overlaps the static route 'webui_1' \(192.168.10.0/24\)"),
+            ("172.16.0.0/16", "router", "gateway must be an IP address"),
+            ("172.16.0.0/16", "192.168.1.1", r"can't be the router itself \(192.168.1.1\)"),
+            ("172.16.0.0/16", "192.168.2.2", r"must be a device in your network \(192.168.1.0/24\)"),
+            ("172.16.0.0/16", "192.168.1.0", "must be a device in your network"),
+            ("172.16.0.0/16", "192.168.1.255", "must be a device in your network"),
+        ],
+    )
+    def test_refuses(self, mock_session_manager: MagicMock, destination: str, gateway: str, message: str) -> None:
+        svc = self._nmc(mock_session_manager, {"webui_1": self.LAB})
+        with pytest.raises(ValueError, match=message):
+            svc.set_static_route(destination, gateway)
+        assert _sent(mock_session_manager, self.READS) == []
+
+    def test_refuses_an_11th_route(self, mock_session_manager: MagicMock) -> None:
+        routes = {f"webui_{n}": {**self.LAB, "Dst": f"172.16.{n}.0"} for n in range(10)}
+        svc = self._nmc(mock_session_manager, routes)
+        with pytest.raises(ValueError, match="There are 10 static routes already"):
+            svc.set_static_route("172.17.0.0/24", "192.168.1.2")
+        svc.set_static_route("172.16.3.0/24", "192.168.1.3")  # changing one is fine
+        assert _sent(mock_session_manager, self.READS)[0][0] == "/sysbus/NMC/LAN/IPv4Route/webui_3:set"
+
+    @pytest.mark.parametrize("route", ["webui_1", "192.168.10.0/24", "192.168.10.7/24"])
+    def test_delete_route_and_the_port_forwarding_behind_it(self, mock_session_manager: MagicMock, route: str) -> None:
+        forwards = {
+            "webui_nas": {"Origin": "webui", "DestinationIPAddress": "192.168.10.20"},
+            "webui_pc": {"Origin": "webui", "DestinationIPAddress": "192.168.1.20"},  # not behind the route
+            "upnp_1": {"Origin": "upnp", "DestinationIPAddress": "192.168.10.21"},  # not made in the web UI
+            "webui_odd": {"Origin": "webui", "DestinationIPAddress": ""},
+        }
+        svc = self._nmc(
+            mock_session_manager, {"webui_1": self.LAB, "webui_2": {**self.LAB, "Dst": "172.16.0.0", "DstLen": 16}}, forwards=forwards
+        )
+        svc.delete_static_route(route)
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/NMC/LAN:deleteStaticRoute", {"parameters": {"Name": "webui_1"}}),
+            ("/sysbus/Firewall:deletePortForwarding", {"parameters": {"id": "webui_nas", "origin": "webui"}}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    def test_delete_route_without_port_forwarding_doesnt_commit(self, mock_session_manager: MagicMock) -> None:
+        svc = self._nmc(mock_session_manager, {"webui_1": self.LAB})
+        assert svc.delete_static_route("webui_1") == '{"status": null}'
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/NMC/LAN:deleteStaticRoute", {"parameters": {"Name": "webui_1"}})]
+
+    @pytest.mark.parametrize("route", ["webui_9", "192.168.11.0/24", "lab/24"])
+    def test_delete_unknown_route(self, mock_session_manager: MagicMock, route: str) -> None:
+        svc = self._nmc(mock_session_manager, {"webui_1": self.LAB})
+        with pytest.raises(ValueError, match=r"no static route .*The routes are: 192.168.10.0/24 \(webui_1\)"):
+            svc.delete_static_route(route)
+        assert _sent(mock_session_manager, self.READS) == []
 
 
 # ── Simple resource classes ───────────────────────────────────────────
@@ -1213,6 +1707,93 @@ class TestScheduler:
         with pytest.raises(ValueError):
             svc.set_device_schedule(self.MAC, [{"begin": bad, "end": 604800}])
         mock_session_manager.post.assert_not_called()
+
+
+class TestWifiSchedule:
+    """The Wi-Fi schedule of the web UI's power settings: type WLAN, ID wl0."""
+
+    NIGHT = [{"begin": 3600, "end": 21600, "state": "Disable"}]  # Monday 01:00 to 06:00
+    SCHEDULE = json.dumps({"status": True, "data": {"scheduleInfo": {"ID": "wl0", "enable": False, "schedule": NIGHT, "value": "Enable"}}})
+
+    @staticmethod
+    def _add(schedule: list, enable: bool) -> tuple:
+        info = {"ID": "wl0", "enable": enable, "base": "Weekly", "def": "Enable", "override": "", "schedule": schedule}
+        return ("/sysbus/Scheduler:addSchedule", {"parameters": {"type": "WLAN", "info": info}})
+
+    def test_wifi_schedule(self, mock_session_manager: MagicMock) -> None:
+        _make_resource(Scheduler, mock_session_manager).wifi_schedule()
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/Scheduler:getSchedule",
+            {"parameters": {"type": "WLAN", "ID": "wl0"}},
+        )
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_wifi_schedule(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        svc = _make_resource(Scheduler, mock_session_manager)
+        svc.set_wifi_schedule([{"begin": "Mon 01:00", "end": "Mon 06:00"}], enable=enable)
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [self._add(self.NIGHT, enable)]
+
+    def test_set_wifi_schedule_without_periods_is_saved_off(self, mock_session_manager: MagicMock) -> None:
+        """Like the web UI: a schedule that never turns Wi-Fi off can't be on."""
+        _make_resource(Scheduler, mock_session_manager).set_wifi_schedule([])
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [self._add([], False)]
+
+    @pytest.mark.parametrize(
+        "periods",
+        [[{"begin": "Mon 00:00", "end": "Sun 24:00"}], [{"begin": "Wed 12:00", "end": "Sun 24:00"}, {"begin": 0, "end": "Wed 12:00"}]],
+    )
+    def test_set_wifi_schedule_refuses_all_week(self, mock_session_manager: MagicMock, periods: list) -> None:
+        with pytest.raises(ValueError, match=r"off all week. To turn Wi-Fi off, use wifi.set_enabled\(False\)"):
+            _make_resource(Scheduler, mock_session_manager).set_wifi_schedule(periods)
+        mock_session_manager.post.assert_not_called()
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_enable_wifi_schedule_keeps_the_periods(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        mock_session_manager.post.side_effect = [self.SCHEDULE, '{"status": true}']
+        assert _make_resource(Scheduler, mock_session_manager).enable_wifi_schedule(enable) == '{"status": true}'
+        assert mock_session_manager.post.call_args[0][:2] == self._add(self.NIGHT, enable)
+
+    def test_enable_wifi_schedule_without_schedule(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.return_value = '{"status": false}'
+        with pytest.raises(ValueError, match="There's no Wi-Fi schedule. Create one with set_wifi_schedule"):
+            _make_resource(Scheduler, mock_session_manager).enable_wifi_schedule()
+        mock_session_manager.post.assert_called_once()
+
+    def test_enable_wifi_schedule_without_periods(self, mock_session_manager: MagicMock) -> None:
+        empty = json.dumps({"status": True, "data": {"scheduleInfo": {"ID": "wl0", "enable": False, "schedule": []}}})
+        mock_session_manager.post.side_effect = [empty, empty, '{"status": true}']
+        svc = _make_resource(Scheduler, mock_session_manager)
+        with pytest.raises(ValueError, match="has no off periods, so it can't be turned on"):
+            svc.enable_wifi_schedule()
+        svc.enable_wifi_schedule(False)  # turning it off is fine
+        assert mock_session_manager.post.call_args[0][:2] == self._add([], False)
+
+    def test_remove_wifi_schedule_turns_it_off_first(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = [self.SCHEDULE, '{"status": true}', '{"status": true}']
+        assert _make_resource(Scheduler, mock_session_manager).remove_wifi_schedule() == '{"status": true}'
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [
+            ("/sysbus/Scheduler:getSchedule", {"parameters": {"type": "WLAN", "ID": "wl0"}}),
+            ("/sysbus/Scheduler:enableSchedule", {"parameters": {"type": "WLAN", "ID": "wl0", "enable": False}}),
+            ("/sysbus/Scheduler:removeSchedules", {"parameters": {"type": "WLAN", "ID": "wl0"}}),
+        ]
+
+    def test_remove_wifi_schedule_without_schedule(self, mock_session_manager: MagicMock) -> None:
+        mock_session_manager.post.side_effect = ['{"status": false}', '{"status": true}']
+        _make_resource(Scheduler, mock_session_manager).remove_wifi_schedule()
+        assert [c[0][0] for c in mock_session_manager.post.call_args_list] == [
+            "/sysbus/Scheduler:getSchedule",
+            "/sysbus/Scheduler:removeSchedules",
+        ]
+
+
+class TestPowerManagement:
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_wifi_6ghz_power_saving(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        _make_resource(PowerManagement, mock_session_manager).set_wifi_6ghz_power_saving(enable)
+        assert mock_session_manager.post.call_args[0][:2] == (
+            "/sysbus/PowerManagement:setTriggeredProfiles",
+            {"parameters": {"profiles": [{"profile": "ECO_6G_SCS", "activate": enable}]}},
+        )
 
 
 # ── MST ───────────────────────────────────────────────────────────────
@@ -1628,6 +2209,240 @@ class TestWifiNetwork:
         svc = self._router(mock_session_manager, lan=lan, answers={"/sysbus/NeMo/Intf/guest:getMIBs": lan})
         with pytest.raises(ValueError, match="no guest Wi-Fi network"):
             svc.set_guest_network(ssid="Friends")
+
+
+def _channel_mibs(access_points: dict | None = None, **radios: dict) -> str:
+    """A getMIBs answer for the LAN with channel settings: 5 GHz on auto (now 52), 2.4 GHz set to 6 by hand."""
+    mibs = json.loads(_wlan_mibs(access_points or {"wl0": _WL0, "wl1": _WL1}))
+    settings = {
+        "wifi0_bcm": {
+            "Channel": 52,
+            "AutoChannelEnable": True,
+            "PossibleChannels": "36,40,44,48,52,56,60,64,100,104,108,112,116,120,124,128,132,136,140",
+        },
+        "wifi1_bcm": {"Channel": 6, "AutoChannelEnable": False, "PossibleChannels": "1,2,3,4,5,6,7,8,9,10,11"},
+    }
+    for radio, values in mibs["status"]["wlanradio"].items():
+        values |= settings[radio] | radios.get(radio, {})
+    return json.dumps(mibs)
+
+
+def _set_radio(access_point: str, radio: str, **settings: object) -> tuple:
+    """The setWLANConfig request that changes only a radio's settings."""
+    return f"/sysbus/NeMo/Intf/{access_point}:setWLANConfig", {"parameters": {"mibs": {"wlanradio": {radio: settings}}}}
+
+
+class TestWifiChannel:
+    """set_channel() and search_channel(), against a router with 5 GHz on wl0 (wifi0_bcm) and 2.4 GHz on wl1 (wifi1_bcm)."""
+
+    @staticmethod
+    def _router(sm: MagicMock, lan: str | None = None, set_answer: str = '{"status": null}') -> Wifi:
+        answers = {"/sysbus/NeMo/Intf/lan:getMIBs": lan or _channel_mibs()}
+        _answering(
+            sm, answers | {f"/sysbus/NeMo/Intf/{vap}:setWLANConfig": set_answer for vap in ("wl0", "wl1")}, default='{"status": true}'
+        )
+        return _make_resource(Wifi, sm)
+
+    @pytest.mark.parametrize(
+        "args,expected",
+        [
+            (("5GHz", 52), _set_radio("wl0", "wifi0_bcm", Channel=52, AutoChannelEnable=False)),
+            (("5GHz", 36, "80MHz"), _set_radio("wl0", "wifi0_bcm", Channel=36, AutoChannelEnable=False, OperatingChannelBandwidth="80MHz")),
+            (("5GHz", "auto", "Auto"), _set_radio("wl0", "wifi0_bcm", AutoChannelEnable=True, OperatingChannelBandwidth="Auto")),
+            (
+                ("2.4GHz", 11, "40MHz"),
+                _set_radio("wl1", "wifi1_bcm", Channel=11, AutoChannelEnable=False, OperatingChannelBandwidth="40MHz"),
+            ),
+            (("2.4GHz", "auto"), _set_radio("wl1", "wifi1_bcm", AutoChannelEnable=True)),
+        ],
+    )
+    def test_set_channel(self, mock_session_manager: MagicMock, args: tuple, expected: tuple) -> None:
+        """Only the radio's settings are sent, not the access point's, e.g. its password."""
+        svc = self._router(mock_session_manager)
+        assert svc.set_channel(*args) == '{"status": null}'
+        assert _sent(mock_session_manager, (":getMIBs",)) == [expected]
+
+    def test_2_4ghz_channels_default_to_1_to_13(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager, _channel_mibs(wifi1_bcm={"PossibleChannels": ""}))
+        svc.set_channel("2.4GHz", 13)
+        with pytest.raises(ValueError, match="one of 1, 2, .*, 13, got 14"):
+            svc.set_channel("2.4GHz", 14)
+
+    @pytest.mark.parametrize(
+        "args,message",
+        [
+            (("5GHz", 140), r'The 5GHz channel must be "auto" or one of 36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, got 140'),
+            (("5GHz", 6), "The 5GHz channel must be"),
+            (("2.4GHz", 13), r"The 2.4GHz channel must be \"auto\" or one of 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, got 13"),
+            (("2.4GHz", True), "The 2.4GHz channel must be"),
+            (("2.4GHz", "6"), "The 2.4GHz channel must be"),
+            (("2.4GHz", "Auto"), "The 2.4GHz channel must be"),
+            (("5GHz", 36, "160MHz"), r"The 5GHz bandwidth must be one of \['80MHz', 'Auto'\], got '160MHz'"),
+            (("2.4GHz", 6, "Auto"), r"The 2.4GHz bandwidth must be one of \['20MHz', '40MHz'\]"),
+            (("6GHz", 37), 'band must be "2.4GHz" or "5GHz", got \'6GHz\''),
+        ],
+    )
+    def test_set_channel_refuses(self, mock_session_manager: MagicMock, args: tuple, message: str) -> None:
+        svc = self._router(mock_session_manager)
+        with pytest.raises(ValueError, match=message):
+            svc.set_channel(*args)
+        assert _sent(mock_session_manager, (":getMIBs",)) == []
+
+    def test_set_channel_on_a_missing_band(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager, _channel_mibs({"wl0": _WL0}))
+        with pytest.raises(ValueError, match="This router has no 2.4GHz Wi-Fi network"):
+            svc.set_channel("2.4GHz", "auto")
+
+    @pytest.mark.parametrize(
+        "answer,message",
+        [
+            ('{"status": false}', "The router didn't accept the settings for wl0.$"),
+            ('{"status": null, "errors": [{"description": "Invalid value"}]}', "didn't accept the settings for wl0: Invalid value"),
+        ],
+    )
+    def test_set_channel_not_accepted(self, mock_session_manager: MagicMock, answer: str, message: str) -> None:
+        svc = self._router(mock_session_manager, set_answer=answer)
+        with pytest.raises(ValueError, match=message):
+            svc.set_channel("5GHz", 36)
+
+    def test_search_channel(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager)
+        svc.search_channel("5GHz")
+        assert _sent(mock_session_manager, (":getMIBs",)) == [("/sysbus/NeMo/Intf/wifi0_bcm:startAutoChannelSelection", {"parameters": {}})]
+
+    def test_search_channel_set_by_hand(self, mock_session_manager: MagicMock) -> None:
+        svc = self._router(mock_session_manager)
+        with pytest.raises(ValueError, match=r"The 2.4GHz channel is set by hand \(channel 6\).*set_channel\(\"2.4GHz\", \"auto\"\)"):
+            svc.search_channel("2.4GHz")
+        assert _sent(mock_session_manager, (":getMIBs",)) == []
+
+
+# ── WireGuard ─────────────────────────────────────────────────────────
+
+
+class TestWireguardClients:
+    """The server switch and the clients, against a router with WireGuard, its server off and a client "laptop"."""
+
+    CLIENT = "/sysbus/WireGuard/Server/default/Client"
+    CONFIG = (
+        "[Interface]\nPrivateKey = cHJpdmF0ZS1rZXk=\nAddress = 10.0.1.3/32\nDNS = 192.168.1.1\n\n"
+        "[Peer]\nPublicKey = cHVibGljLWtleQ==\nAllowedIPs = 0.0.0.0/0\nEndpoint = 203.0.113.5:51820\n"
+    )
+    READS = (":_get", ":getLANIP", ":getWANStatus")
+
+    def _wireguard(self, sm: MagicMock, enabled: bool = True, public_ip: str = "203.0.113.5", **answers: object) -> Wireguard:
+        clients = {
+            "WireGuard.Server.1.Client.1.": {"Alias": "laptop", "Enable": True, "IntranetAccess": True},
+            "WireGuard.Server.1.Client.": {},
+        }
+        _answering(
+            sm,
+            {
+                "/sysbus/WireGuard:_get": json.dumps({"status": {"WireGuard.": {"Enable": enabled, "Status": "Enabled"}}}),
+                f"{self.CLIENT}:_get": json.dumps({"status": clients}),
+                "/sysbus/NMC:getLANIP": json.dumps({"status": None, "data": {"Address": "192.168.1.1"}}),
+                "/sysbus/NMC:getWANStatus": json.dumps({"status": True, "data": {"IPAddress": public_ip}}),
+                f"{self.CLIENT}/phone:GeneratePrivateKeyAndGetQRConfig": json.dumps({"status": self.CONFIG}),
+                **{f"{self.CLIENT}/phone:{function}": answer for function, answer in answers.items()},
+            },
+            default='{"status": null}',
+        )
+        return _make_resource(Wireguard, sm)
+
+    def test_client_status(self, mock_session_manager: MagicMock) -> None:
+        _make_resource(Wireguard, mock_session_manager).client_status("laptop")
+        assert mock_session_manager.post.call_args[0][0] == f"{self.CLIENT}/laptop/InfoStats:_get"
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_server_enabled(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        self._wireguard(mock_session_manager).set_server_enabled(enable)
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/WireGuard/Server/default:_set", {"parameters": {"parameters": {"Enable": enable}}})
+        ]
+
+    def test_add_client_with_the_public_ip(self, mock_session_manager: MagicMock) -> None:
+        svc = self._wireguard(mock_session_manager)
+        assert json.loads(svc.add_client("phone")) == {"status": self.CONFIG}
+        assert _sent(mock_session_manager, self.READS) == [
+            (f"{self.CLIENT}:_add", {"parameters": {"parameters": {"Alias": "phone", "ExtraData": "203.0.113.5;192.168.1.1"}}}),
+            (f"{self.CLIENT}/phone:_set", {"parameters": {"parameters": {"Enable": True, "IntranetAccess": True}}}),
+            (f"{self.CLIENT}/phone:GeneratePrivateKeyAndGetQRConfig", {"parameters": {}}),
+        ]
+
+    def test_add_client_with_a_host_name(self, mock_session_manager: MagicMock) -> None:
+        """Like the web UI, the router's public IP address in the configuration is replaced with the endpoint."""
+        svc = self._wireguard(mock_session_manager)
+        config = json.loads(svc.add_client("phone", endpoint="myhome.ddns.net", intranet_access=False))["status"]
+        assert config == self.CONFIG.replace("Endpoint = 203.0.113.5:51820", "Endpoint = myhome.ddns.net:51820")
+        assert _sent(mock_session_manager, self.READS)[:2] == [
+            (f"{self.CLIENT}:_add", {"parameters": {"parameters": {"Alias": "phone", "ExtraData": "myhome.ddns.net;192.168.1.1"}}}),
+            (f"{self.CLIENT}/phone:_set", {"parameters": {"parameters": {"Enable": True, "IntranetAccess": False}}}),
+        ]
+        assert "/sysbus/NMC:getWANStatus" not in [c[0][0] for c in mock_session_manager.post.call_args_list]
+
+    @pytest.mark.parametrize(
+        "kwargs,setup,message",
+        [
+            ({"name": "ph"}, {}, "client name must be 3 to 16 letters"),
+            ({"name": "x" * 17}, {}, "client name must be"),
+            ({"name": "1phone"}, {}, "client name must be"),
+            ({"name": "_phone"}, {}, "client name must be"),
+            ({"name": "my phone"}, {}, "client name must be"),
+            ({"name": "laptop"}, {}, "There's already a WireGuard client named 'laptop'"),
+            ({"endpoint": "my home"}, {}, "endpoint must be an IPv4 address or a host name"),
+            ({"endpoint": "-home.ddns.net"}, {}, "endpoint must be"),
+            ({}, {"enabled": False}, "WireGuard isn't available on this router"),
+            ({}, {"public_ip": "0.0.0.0"}, "The router has no public IPv4 address. Give an endpoint"),
+            ({}, {"public_ip": ""}, "no public IPv4 address"),
+        ],
+    )
+    def test_add_client_refuses(self, mock_session_manager: MagicMock, kwargs: dict, setup: dict, message: str) -> None:
+        svc = self._wireguard(mock_session_manager, **setup)
+        with pytest.raises(ValueError, match=message):
+            svc.add_client(**{"name": "phone", **kwargs})
+        assert _sent(mock_session_manager, self.READS) == []
+
+    @pytest.mark.parametrize(
+        "answers,error",
+        [
+            ({"GeneratePrivateKeyAndGetQRConfig": '{"status": null}'}, ValueError),
+            ({"GeneratePrivateKeyAndGetQRConfig": '{"status": "error"}'}, ValueError),
+            ({"_set": _http_error(500)}, requests.HTTPError),
+        ],
+    )
+    def test_add_client_deletes_the_client_again_on_errors(self, mock_session_manager: MagicMock, answers: dict, error: type) -> None:
+        svc = self._wireguard(mock_session_manager, **answers)
+        with pytest.raises(error):
+            svc.add_client("phone")
+        assert _sent(mock_session_manager, self.READS)[-1] == (f"{self.CLIENT}/phone:_del", {"parameters": {}})
+
+    @pytest.mark.parametrize(
+        "kwargs,changes",
+        [({"enabled": False}, {"Enable": False}), ({"enabled": True, "intranet_access": False}, {"Enable": True, "IntranetAccess": False})],
+    )
+    def test_set_client(self, mock_session_manager: MagicMock, kwargs: dict, changes: dict) -> None:
+        self._wireguard(mock_session_manager).set_client("laptop", **kwargs)
+        assert _sent(mock_session_manager, self.READS) == [(f"{self.CLIENT}/laptop:_set", {"parameters": {"parameters": changes}})]
+
+    def test_set_client_without_changes(self, mock_session_manager: MagicMock) -> None:
+        with pytest.raises(ValueError, match="Nothing to change"):
+            self._wireguard(mock_session_manager).set_client("laptop")
+        mock_session_manager.post.assert_not_called()
+
+    def test_delete_client(self, mock_session_manager: MagicMock) -> None:
+        self._wireguard(mock_session_manager).delete_client("laptop")
+        assert _sent(mock_session_manager, self.READS) == [(f"{self.CLIENT}/laptop:_del", {"parameters": {}})]
+
+    @pytest.mark.parametrize("method,kwargs", [("set_client", {"enabled": False}), ("delete_client", {})])
+    def test_unknown_client(self, mock_session_manager: MagicMock, method: str, kwargs: dict) -> None:
+        with pytest.raises(ValueError, match="There's no WireGuard client named 'tablet'. The clients are: 'laptop'."):
+            getattr(self._wireguard(mock_session_manager), method)("tablet", **kwargs)
+        assert _sent(mock_session_manager, self.READS) == []
+
+    def test_set_server_enabled_without_wireguard(self, mock_session_manager: MagicMock) -> None:
+        with pytest.raises(ValueError, match="WireGuard isn't available"):
+            self._wireguard(mock_session_manager, enabled=False).set_server_enabled(True)
+        assert _sent(mock_session_manager, self.READS) == []
 
 
 # ── WWAN ──────────────────────────────────────────────────────────────

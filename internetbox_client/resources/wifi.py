@@ -9,6 +9,11 @@ import requests
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.labels import disruptive, write
 
+# The web UI offers these 5 GHz channels, though the radio supports more. 52 to 112 are DFS channels.
+_5GHZ_CHANNELS = (36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112)
+# The web UI's channel widths. 5 GHz "Auto" is 80 or 160 MHz.
+_BANDWIDTHS = {"2.4GHz": ("20MHz", "40MHz"), "5GHz": ("80MHz", "Auto")}
+
 
 def _check_ssid(ssid: str, network: str) -> None:
     """Raise unless the web UI would accept ssid as a network name."""
@@ -30,6 +35,11 @@ def _check_password(password: str, network: str) -> None:
 
 def _password(access_point: dict) -> str | None:
     return (access_point.get("Security") or {}).get("KeyPassPhrase")
+
+
+def _radio_name(mibs: dict, access_point: str) -> str | None:
+    """The radio an access point runs on, e.g. "wifi0_bcm". RadioReference is empty, so it comes from "base"."""
+    return next(iter(((mibs.get("base") or {}).get(access_point) or {}).get("LLIntf") or {}), None)
 
 
 def _network_summary(network: str, access_point: dict) -> dict:
@@ -274,33 +284,119 @@ class Wifi(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/NMC/Wifi:stopPairing", data)
 
+    @disruptive
+    def set_channel(self, band: Literal["2.4GHz", "5GHz"], channel: int | Literal["auto"], bandwidth: str | None = None) -> str:
+        """Set a band's Wi-Fi channel, or let the router choose it, like the channel settings in the web UI.
+
+        Devices on the band lose their connection for a moment while the radio changes channel. On 5 GHz channels 52 to
+        112 (DFS), the router first listens for radar for about a minute, and moves to another channel by itself when
+        it hears one. The guest network uses the same radios, so it changes too.
+
+        Args:
+            band (str): "2.4GHz" or "5GHz".
+            channel (int | str): a channel, or "auto" to let the router choose. 2.4 GHz: one of the radio's
+                PossibleChannels in lan.mibs(), usually 1 to 13. 5 GHz: 36 to 64 or 100 to 112, like the web UI.
+            bandwidth (str | None): channel width. 2.4 GHz: "20MHz" or "40MHz". 5 GHz: "80MHz", or "Auto" for 80 or
+                160 MHz. Default: keep the current width.
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: if the router has no such band, the channel or width isn't one the web UI offers, or the
+                router doesn't accept the change.
+
+        """
+        if band in _BANDWIDTHS and bandwidth is not None and bandwidth not in _BANDWIDTHS[band]:
+            raise ValueError(f"The {band} bandwidth must be one of {list(_BANDWIDTHS[band])}, got {bandwidth!r}")
+        access_point, radio_name, radio = self._radio(band)
+        if channel == "auto":
+            settings: dict = {"AutoChannelEnable": True}
+        else:
+            if band == "5GHz":
+                allowed = _5GHZ_CHANNELS
+            else:
+                possible = str(radio.get("PossibleChannels") or "").split(",")
+                allowed = tuple(int(c) for c in possible if c.strip().isdigit()) or tuple(range(1, 14))
+            if isinstance(channel, bool) or channel not in allowed:
+                raise ValueError(f'The {band} channel must be "auto" or one of {", ".join(map(str, allowed))}, got {channel!r}')
+            settings = {"Channel": channel, "AutoChannelEnable": False}
+        if bandwidth is not None:
+            settings["OperatingChannelBandwidth"] = bandwidth
+        return self._set_wlan_mibs(access_point, {"wlanradio": {radio_name: settings}})
+
+    @disruptive
+    def search_channel(self, band: Literal["2.4GHz", "5GHz"]) -> str:
+        """Let the router choose a band's channel again now, like "Search again" in the web UI's Wi-Fi settings.
+
+        Only when the band's channel is set to "auto" (see set_channel()). Finding a channel may take a minute; if the
+        router moves to another one, devices on the band lose their connection for a moment.
+
+        Args:
+            band (str): "2.4GHz" or "5GHz".
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: if the router has no such band, or its channel is set by hand.
+
+        """
+        _, radio_name, radio = self._radio(band)
+        if not radio.get("AutoChannelEnable"):
+            raise ValueError(
+                f"The {band} channel is set by hand (channel {radio.get('Channel')}). Let the router choose it with "
+                f'set_channel("{band}", "auto") (ibox wifi set-channel {band} auto).'
+            )
+        data = {"parameters": {}}
+        return self.post(f"/sysbus/NeMo/Intf/{radio_name}:startAutoChannelSelection", data)
+
     def _settings(self) -> dict:
         """The settings in status(), e.g. ConfigurationMode and WPSEnable."""
         response = json.loads(self.status())
         return response.get("status") or response.get("data") or {}
+
+    def _mibs(self, interface: str) -> dict:
+        """The access points, radios and base settings below interface, e.g. "lan"."""
+        data = {"parameters": {"mibs": "wlanvap || wlanradio || base", "flag": "", "traverse": "down"}}
+        return json.loads(self.post(f"/sysbus/NeMo/Intf/{interface}:getMIBs", data))["status"]
 
     def _access_points(self) -> tuple[dict[str, dict], dict[str, dict]]:
         """The Wi-Fi and the guest Wi-Fi access points by name, e.g. "wl0": their settings, with their radio's band and
         channel added as "Band" and "Channel"."""
         found = []
         for interface in ("lan", "guest"):
-            data = {"parameters": {"mibs": "wlanvap || wlanradio || base", "flag": "", "traverse": "down"}}
-            mibs = json.loads(self.post(f"/sysbus/NeMo/Intf/{interface}:getMIBs", data))["status"]
-            radios, base = mibs.get("wlanradio") or {}, mibs.get("base") or {}
+            mibs = self._mibs(interface)
+            radios = mibs.get("wlanradio") or {}
             access_points = {}
             for name, settings in (mibs.get("wlanvap") or {}).items():
-                # RadioReference is empty, so the band comes from the radio below the access point.
-                radio = radios.get(next(iter((base.get(name) or {}).get("LLIntf") or {}), None)) or {}
+                radio = radios.get(_radio_name(mibs, name)) or {}
                 access_points[name] = {**settings, "Band": radio.get("OperatingFrequencyBand"), "Channel": radio.get("Channel")}
             found.append(access_points)
         main, guest = found
         # The guest interface also lists the Wi-Fi's access points.
         return main, {name: settings for name, settings in guest.items() if name not in main}
 
+    def _radio(self, band: str) -> tuple[str, str, dict]:
+        """The Wi-Fi access point on band, e.g. "wl0", its radio, e.g. "wifi0_bcm", and the radio's settings."""
+        if band not in _BANDWIDTHS:
+            raise ValueError(f'band must be "2.4GHz" or "5GHz", got {band!r}')
+        mibs = self._mibs("lan")
+        radios = mibs.get("wlanradio") or {}
+        for access_point in mibs.get("wlanvap") or {}:
+            radio = _radio_name(mibs, access_point)
+            if radio in radios and radios[radio].get("OperatingFrequencyBand") == band:
+                return access_point, radio, radios[radio]
+        raise ValueError(f"This router has no {band} Wi-Fi network.")
+
     def _set_wlan_config(self, access_point: str, settings: dict) -> str:
         """Save an access point's settings. Raises unless the router answers with a null status, like the web UI."""
-        data = {"parameters": {"mibs": {"wlanvap": {access_point: settings}}}}
-        response = self.post(f"/sysbus/NeMo/Intf/{access_point}:setWLANConfig", data)
+        return self._set_wlan_mibs(access_point, {"wlanvap": {access_point: settings}})
+
+    def _set_wlan_mibs(self, access_point: str, mibs: dict) -> str:
+        """Save access point or radio settings through an access point, e.g. {"wlanradio": {"wifi0_bcm": {...}}}.
+        Raises unless the router answers with a null status, like the web UI."""
+        response = self.post(f"/sysbus/NeMo/Intf/{access_point}:setWLANConfig", {"parameters": {"mibs": mibs}})
         answer = json.loads(response)
         if answer.get("status") is not None or answer.get("errors"):
             reasons = "; ".join(str(error.get("description")) for error in answer.get("errors") or [])
@@ -364,7 +460,8 @@ class Wifi(APIClient):
         """Get Wi-Fi radio settings
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz, 2 for 6GHz.
+            id (int): radio number, as in the radio's name "wifi{id}_bcm". Which band a radio serves differs between
+                routers: OperatingFrequencyBand in the response shows it.
 
         Returns:
             str: response content
@@ -378,7 +475,8 @@ class Wifi(APIClient):
         """Get spectrum information for a radio
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz.
+            id (int): radio number, as in the radio's name "wifi{id}_bcm". Which band a radio serves differs between
+                routers: OperatingFrequencyBand in radio(id) shows it.
 
         Returns:
             str: response content
@@ -392,7 +490,8 @@ class Wifi(APIClient):
         """Scan for nearby networks for a radio
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz.
+            id (int): radio number, as in the radio's name "wifi{id}_bcm". Which band a radio serves differs between
+                routers: OperatingFrequencyBand in radio(id) shows it.
 
         Returns:
             str: response content
@@ -408,7 +507,8 @@ class Wifi(APIClient):
             Use the radio method to check the supported power levels for each radio.
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz, 2 for 6GHz.
+            id (int): radio number, as in the radio's name "wifi{id}_bcm". Which band a radio serves differs between
+                routers: OperatingFrequencyBand in radio(id) shows it.
             power (int): Wi-Fi power level (0-100)
 
         Returns:
@@ -422,7 +522,8 @@ class Wifi(APIClient):
         """Get latest Wi-Fi power for a radio
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz.
+            id (int): radio number, as in the radio's name "wifi{id}_bcm". Which band a radio serves differs between
+                routers: OperatingFrequencyBand in radio(id) shows it.
 
         Returns:
             str: response content
@@ -435,7 +536,8 @@ class Wifi(APIClient):
         """Get per-antenna RSSI for a radio
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz.
+            id (int): radio number, as in the radio's name "wifi{id}_bcm". Which band a radio serves differs between
+                routers: OperatingFrequencyBand in radio(id) shows it.
 
         Returns:
             str: response content
@@ -448,7 +550,8 @@ class Wifi(APIClient):
         """Get station statistics for a radio
 
         Args:
-            id (int): radio ID. E.g 0 for 2.4GHz, 1 for 5GHz.
+            id (int): access point number, as in its name "wl{id}". Which band an access point serves differs between
+                routers: in lan.mibs(), "base" lists its radio (LLIntf) and "wlanradio" the radio's OperatingFrequencyBand.
 
         Returns:
             str: response content

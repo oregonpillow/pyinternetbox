@@ -127,6 +127,34 @@ _CONFIRM = {
         lambda args: True,
     ),
     ("wifi", "set_guest_enabled"): ("Turn off the guest Wi-Fi? Devices on it will lose their connection.", lambda args: not args["enable"]),
+    ("wifi", "set_channel"): (
+        "Change the Wi-Fi channel? Devices on this band lose their connection for a moment, and for about a minute on 5 GHz "
+        "channels 52 to 112, where the router first listens for radar.",
+        lambda args: True,
+    ),
+    ("wifi", "search_channel"): (
+        "Let the router choose a new Wi-Fi channel now? If it changes, devices on this band lose their connection for a moment.",
+        lambda args: True,
+    ),
+    ("scheduler", "set_wifi_schedule"): (
+        "Turn Wi-Fi off on a schedule? During the off periods, every wireless device loses its connection, including this "
+        "computer if it's on Wi-Fi.",
+        lambda args: args["enable"] and bool(args["off_periods"]),
+    ),
+    ("scheduler", "enable_wifi_schedule"): (
+        "Turn on the Wi-Fi schedule? During its off periods, every wireless device loses its connection, including this "
+        "computer if it's on Wi-Fi.",
+        lambda args: args["enable"],
+    ),
+    ("firewall", "set_custom_policy"): (
+        "Block all outgoing traffic that no custom rule allows? While the firewall level is Custom, devices then lose "
+        "internet access except for the ports that rules allow.",
+        lambda args: args["action"] == "block" and args["direction"] == "outbound",
+    ),
+    ("wireguard", "set_server_enabled"): (
+        "Turn off the WireGuard VPN server? Connected VPN clients lose their connection.",
+        lambda args: not args["enable"],
+    ),
     ("voice", "clear_call_list"): ("Delete all calls from the call list? They can't be brought back.", lambda args: True),
 }
 
@@ -154,6 +182,20 @@ def _typer_annotation(param: inspect.Parameter) -> type:
     return str
 
 
+def _union_options(ann: object) -> tuple | None:
+    """The types of a union left after _base_type, e.g. ``int | Literal["auto"]``; None for other annotations."""
+    if isinstance(ann, types.UnionType) or typing.get_origin(ann) is typing.Union:
+        return tuple(a for a in typing.get_args(ann) if a is not type(None))
+    return None
+
+
+def _describe(ann: object) -> str:
+    """A union member for help and error messages, e.g. "a number" or "'auto'"."""
+    if typing.get_origin(ann) is typing.Literal:
+        return " or ".join(repr(choice) for choice in typing.get_args(ann))
+    return "a whole number" if ann is int else "a number" if ann is float else "text"
+
+
 def _typer_help(pname: str, param: inspect.Parameter) -> str:
     """Build a short help string for a CLI parameter."""
     ann = _base_type(param.annotation)
@@ -164,6 +206,8 @@ def _typer_help(pname: str, param: inspect.Parameter) -> str:
         help_str += " (JSON object)"
     elif getattr(ann, "__origin__", None) is typing.Literal:
         help_str += f" (choices: {list(ann.__args__)})"
+    elif _union_options(ann):
+        help_str += f" ({' or '.join(_describe(option) for option in _union_options(ann) or ())})"
     elif ann is bool and param.default is inspect.Parameter.empty:  # options are --x/--no-x flags instead
         help_str += " (true or false)"
     return help_str
@@ -184,6 +228,18 @@ def _coerce_value(val: str, ann: object) -> object:
         return ann(val)
     if getattr(ann, "__origin__", None) is typing.Literal:
         return type(ann.__args__[0])(val)
+    options = _union_options(ann)
+    if options:
+        # A choice such as "auto" first, then the other types in order, e.g. a channel number.
+        for option in options:
+            for choice in typing.get_args(option) if typing.get_origin(option) is typing.Literal else ():
+                if str(choice) == val:
+                    return choice
+        for option in options:
+            if typing.get_origin(option) is not typing.Literal:
+                with contextlib.suppress(ValueError):
+                    return _coerce_value(val, option)
+        raise ValueError(f"Expected {' or '.join(_describe(option) for option in options)}, got {val!r}")
     return val
 
 
