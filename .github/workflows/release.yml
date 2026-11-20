@@ -86,6 +86,9 @@ jobs:
   docker:
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: docker-hub
+      url: https://hub.docker.com/r/oregonpillow/pyinternetbox
     steps:
       - uses: actions/checkout@v4
 
