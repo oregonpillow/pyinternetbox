@@ -37,6 +37,12 @@ _COMMANDS = [
     ("firewall", "set_custom_rule"),
     ("firewall", "set_custom_policy"),
     ("wireguard", "set_server_enabled"),
+    ("wifi", "set_steering_enabled"),
+    ("wifi", "set_standard"),
+    ("wifi", "set_device_steering"),
+    ("dns", "set_upstream_servers"),
+    ("firewall", "delete_all_port_forwarding"),
+    ("devices", "reset_traffic_counters"),
 ]
 
 
@@ -160,6 +166,27 @@ def test_bool_option_default(client: MagicMock) -> None:
     assert client.firewall.set_port_forwarding.call_args.kwargs["enabled"] is True
 
 
+@pytest.mark.parametrize(
+    "args,kwargs",
+    [
+        (["--no-steer"], {"steer": False, "access_point": None}),
+        (["--access-point", "router"], {"steer": True, "access_point": "router"}),
+        ([], {"steer": True, "access_point": None}),
+    ],
+)
+def test_device_steering_options(client: MagicMock, args: list[str], kwargs: dict) -> None:
+    assert runner.invoke(cli.app, ["wifi", "set-device-steering", "aa:bb:cc:dd:ee:ff", *args]).exit_code == 0
+    client.wifi.set_device_steering.assert_called_once_with(mac="aa:bb:cc:dd:ee:ff", **kwargs)
+
+
+def test_standard_not_offered_shows_message() -> None:
+    """The CLI converts the number; the method refuses it before contacting the router."""
+    with patch.object(cli, "_make_client", lambda: InternetBoxClient(hostname="192.0.2.1", ssl_verify=False)):
+        result = runner.invoke(cli.app, ["wifi", "set-standard", "5GHz", "8", "--yes"])
+    assert result.exit_code == 1
+    assert "The 5GHz standard must be one of 7, 6, 5, got 8" in result.output
+
+
 def test_optional_int_and_dict_options(client: MagicMock) -> None:
     args = ["mst", "set", "aa:bb:cc:dd:ee:ff", "--minutes-per-day", "90", "--allowed-time", '{"Sat": 240}']
     assert runner.invoke(cli.app, args).exit_code == 0
@@ -263,6 +290,21 @@ _CONFIRMED = [
         {"action": "block", "ip_version": 4, "direction": "outbound"},
     ),
     (["wireguard", "set-server-enabled", "false"], "Turn off the WireGuard VPN server?", "wireguard.set_server_enabled", {"enable": False}),
+    (["wifi", "set-steering-enabled", "true"], "Turn band steering on?", "wifi.set_steering_enabled", {"enable": True}),
+    (["wifi", "set-standard", "5GHz", "6"], "Change the Wi-Fi standard?", "wifi.set_standard", {"band": "5GHz", "standard": 6}),
+    (
+        ["dns", "set-upstream-servers", "1.1.1.1,9.9.9.9"],
+        "Change the DNS servers the router asks?",
+        "dns.set_upstream_servers",
+        {"servers": ["1.1.1.1", "9.9.9.9"]},
+    ),
+    (["firewall", "delete-all-port-forwarding"], "Delete all port forwarding rules?", "firewall.delete_all_port_forwarding", {}),
+    (
+        ["devices", "reset-traffic-counters"],
+        "Set every device's traffic counters for the last day, week and month to 0?",
+        "devices.reset_traffic_counters",
+        {},
+    ),
 ]
 
 
@@ -312,10 +354,12 @@ def test_turning_wifi_on_doesnt_ask(client: MagicMock, args: list[str], method: 
         (["firewall", "set-custom-policy", "allow"], "firewall.set_custom_policy"),
         (["firewall", "set-custom-policy", "block", "--ip-version", "6", "--direction", "inbound"], "firewall.set_custom_policy"),
         (["wireguard", "set-server-enabled", "true"], "wireguard.set_server_enabled"),
+        (["wifi", "set-steering-enabled", "false"], "wifi.set_steering_enabled"),
     ],
 )
 def test_harmless_variants_dont_ask(client: MagicMock, args: list[str], method: str) -> None:
-    """Wi-Fi stays on, blocking inbound traffic doesn't cut anyone off the internet, and the VPN server goes on."""
+    """Wi-Fi stays on, blocking inbound traffic doesn't cut anyone off the internet, the VPN server goes on, and devices
+    stay where they are without band steering."""
     result = runner.invoke(cli.app, args)
     assert result.exit_code == 0
     assert "?" not in result.output

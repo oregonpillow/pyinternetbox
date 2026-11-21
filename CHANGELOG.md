@@ -2,6 +2,18 @@
 
 What's new in each release of pyinternetbox. The newest release comes first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Wi-Fi**: turn band steering on or off (`wifi.set_steering_enabled()`), leave a device out of band steering or keep it on the router or a WLAN-Box (`wifi.set_device_steering()`), choose the newest Wi-Fi standard each band offers, e.g. Wi-Fi 6 instead of 7 (`wifi.set_standard()`), and whether WLAN-Boxes turn their Wi-Fi on and off with the router's (`wifi.set_wlan_box_sync()`).
+- **DNS**: set the DNS servers the router itself asks, e.g. a Pi-hole, or go back to the internet provider's (`dns.set_upstream_servers()`), turn the DNS cache on or off (`dns.set_cache_enabled()`), and count the DNS queries the router answered (`dns.metrics()`).
+- **Devices**: set a device's type, which picks its icon (`devices.set_type()`, with the web interface's types in `DEVICE_TYPES`), give it a different name in the router's DNS than the one the web interface shows (`devices.set_dns_name()`, `remove_dns_name()`), go back to the name it was found with (`devices.reset_name()`), set every device's traffic counters to 0 (`devices.reset_traffic_counters()`) and delete a Wi-Fi device's recent traffic readings, which the web interface draws its graphs from (`devices.clear_traffic_history()`).
+- **Firewall**: whether the router answers pings from the internet (`firewall.respond_to_ping()`, `set_respond_to_ping()`), forwarding whole IP protocols such as GRE to a device (`firewall.protocol_forwarding()`, `set_protocol_forwarding()`, `delete_protocol_forwarding()`), IPv6 pinholes (`firewall.ipv6_pinholes()`, `set_ipv6_pinhole()`, `delete_ipv6_pinhole()`), and deleting all port forwarding rules at once (`firewall.delete_all_port_forwarding()`).
+- **Troubleshooting**: save a log file for technical support and a Wi-Fi debug snapshot on the router (`debug.save_log_file()`, `debug.save_wifi_logs()`).
+- **Exporter**: DNS query counts since the router last booted: how many queries the router answered itself or passed on, and per DNS server how many it sent, failed or retried (`internetbox_dns_*_total`). See "DNS query metrics" in the README.
+- **CLI**: turning band steering on, changing a Wi-Fi standard or the router's DNS servers, deleting all port forwarding rules and resetting the traffic counters ask for confirmation first, and so does the MCP server.
+
 ## [0.2.0] - 2026-11-20
 
 pyinternetbox can now change the router's settings, like the switches and forms of the web interface: Wi-Fi, devices, parental controls, firewall, DNS, VPN and more. A new MCP server, `ibox mcp`, lets AI apps such as OpenCode look at the router and, if you allow it, manage it.
@@ -48,6 +60,7 @@ pyinternetbox can now change the router's settings, like the switches and forms 
 
 First release: the Python library, the `ibox` CLI and a Prometheus exporter with Grafana dashboards, for Swisscom and Wingo Internet Box routers. Published on PyPI and as the Docker image `oregonpillow/pyinternetbox`.
 
+[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/oregonpillow/pyinternetbox/releases/tag/v0.1.0

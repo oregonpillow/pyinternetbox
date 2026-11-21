@@ -134,6 +134,18 @@ class TestDebug:
         svc.wifi_driver_stats()
         assert "/sysbus/NMC/Debug:getWifiDriverStats" in mock_session_manager.post.call_args[0][0]
 
+    @pytest.mark.parametrize(
+        "method,request_",
+        [
+            ("save_log_file", ("/sysbus/NMC/Debug/DebugFile:set", {"parameters": {"GenerateFile": True}})),
+            ("save_wifi_logs", ("/sysbus/NMC/Debug:generateWiFiLogs", {"parameters": {}})),
+        ],
+    )
+    def test_save_logs(self, mock_session_manager: MagicMock, method: str, request_: tuple) -> None:
+        svc = _make_resource(Debug, mock_session_manager)
+        getattr(svc, method)()
+        assert _sent(mock_session_manager) == [request_]
+
 
 # ── DECT ──────────────────────────────────────────────────────────────
 
@@ -210,6 +222,76 @@ class TestDevices:
             "/ws",
             {"service": service, "method": "set", "parameters": {"parameters": {"Name": "Laptop"}}},
         )
+
+    @pytest.mark.parametrize(
+        "call,method,parameters",
+        [
+            (lambda svc: svc.reset_name("aa-bb-cc-dd-ee-ff"), "removeName", {"source": "webui"}),
+            (lambda svc: svc.set_type("aa:bb:cc:dd:ee:ff", "tv box"), "set", {"parameters": {"DeviceType": "tv box"}}),
+            (lambda svc: svc.set_dns_name("aa:bb:cc:dd:ee:ff", "nas-2"), "setName", {"name": "nas-2", "source": "dns"}),
+            (lambda svc: svc.remove_dns_name("AA:BB:CC:DD:EE:FF"), "removeName", {"source": "dns"}),
+        ],
+    )
+    def test_names_and_type(self, mock_session_manager: MagicMock, call, method: str, parameters: dict) -> None:
+        svc = _make_resource(Devices, mock_session_manager)
+        call(svc)
+        assert _sent(mock_session_manager) == [
+            ("/ws", {"service": "Devices.Device.AA:BB:CC:DD:EE:FF", "method": method, "parameters": parameters})
+        ]
+
+    def test_set_type_needs_a_web_ui_type(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Devices, mock_session_manager)
+        with pytest.raises(ValueError, match=r"device_type must be one of the web UI's types: generic, computer, .*Got 'Computer'"):
+            svc.set_type("aa:bb:cc:dd:ee:ff", "Computer")
+        mock_session_manager.post.assert_not_called()
+
+    @pytest.mark.parametrize("name", ["", "-nas", "nas-", "my nas", "nas.lan", "nås", "a" * 64])
+    def test_set_dns_name_checks_the_name(self, mock_session_manager: MagicMock, name: str) -> None:
+        svc = _make_resource(Devices, mock_session_manager)
+        with pytest.raises(ValueError, match="1 to 63 letters, digits and hyphens"):
+            svc.set_dns_name("aa:bb:cc:dd:ee:ff", name)
+        mock_session_manager.post.assert_not_called()
+
+    def test_reset_traffic_counters(self, mock_session_manager: MagicMock) -> None:
+        """Like the web UI: the parameters aren't wrapped in "parameters", as they are for Devices.Device.{key}:set."""
+        svc = _make_resource(Devices, mock_session_manager)
+        svc.reset_traffic_counters()
+        assert _sent(mock_session_manager) == [
+            ("/ws", {"service": "Devices.Config.bandwidth", "method": "set", "parameters": {"Reset": 1}})
+        ]
+
+    def test_clear_traffic_history(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Devices, mock_session_manager)
+        svc.clear_traffic_history("aa-bb-cc-dd-ee-ff")
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/GenLog:clearLogs", {"parameters": {"topic": topic, "source": "Devices.Device.AA:BB:CC:DD:EE:FF"}})
+            for topic in ("network", "network_persistent")
+        ]
+
+    _NO_TOPIC = (
+        "500 Server Error\nRouter says: Topic does not exist for source (Devices.Device.AA:BB:CC:DD:EE:FF); Function execution failed"
+    )
+
+    def test_clear_traffic_history_without_network_persistent(self, mock_session_manager: MagicMock) -> None:
+        """The Internet-Box 4 only keeps a Wi-Fi device's recent readings ("network") in GenLog, like on 15.21.36."""
+        _answering(mock_session_manager, {"/sysbus/GenLog:clearLogs": ['{"status": true}', requests.HTTPError(self._NO_TOPIC)]})
+        svc = _make_resource(Devices, mock_session_manager)
+        assert svc.clear_traffic_history("aa:bb:cc:dd:ee:ff") == '{"status": true}'
+        assert mock_session_manager.post.call_count == 2
+
+    def test_clear_traffic_history_without_a_history(self, mock_session_manager: MagicMock) -> None:
+        _answering(mock_session_manager, {"/sysbus/GenLog:clearLogs": requests.HTTPError(self._NO_TOPIC)})
+        svc = _make_resource(Devices, mock_session_manager)
+        with pytest.raises(ValueError, match="The router has no traffic history for aa:bb:cc:dd:ee:ff, e.g. because it's wired or never"):
+            svc.clear_traffic_history("aa:bb:cc:dd:ee:ff")
+
+    def test_clear_traffic_history_other_errors(self, mock_session_manager: MagicMock) -> None:
+        _answering(
+            mock_session_manager, {"/sysbus/GenLog:clearLogs": requests.HTTPError("500 Server Error\nRouter says: Permission denied")}
+        )
+        svc = _make_resource(Devices, mock_session_manager)
+        with pytest.raises(requests.HTTPError, match="Permission denied"):
+            svc.clear_traffic_history("aa:bb:cc:dd:ee:ff")
 
     def test_wake_on_lan(self, mock_session_manager: MagicMock) -> None:
         svc = _make_resource(Devices, mock_session_manager)
@@ -536,6 +618,74 @@ class TestDNS:
         svc.flush_cache()
         assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/DNS/Server/Cache:flush", {"parameters": {}})
 
+    def test_metrics(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(DNS, mock_session_manager)
+        svc.metrics()
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/DNS/Server:getMetrics", {"parameters": {}})
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_cache_enabled_empties_the_cache(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        svc = _make_resource(DNS, mock_session_manager)
+        svc.set_cache_enabled(enable)
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/DNS/Server:configureCache", {"parameters": {"enable": enable, "commit": True}}),
+            ("/sysbus/DNS/Server/Cache:flush", {"parameters": {}}),
+        ]
+
+
+_ROUTES = json.dumps(
+    {"status": {"webuidns1": {"Status": "Enabled", "DNS": "192.168.1.53"}, "dataV4_1": {"Status": "Disabled", "DNS": "193.247.204.23"}}}
+)
+_LAN_IP = json.dumps({"status": True, "data": {"Address": "192.168.1.1", "Netmask": "255.255.255.0"}})
+
+
+class TestDNSUpstreamServers:
+    """set_upstream_servers(), against a router that asks one server set in the web UI, 192.168.1.53."""
+
+    READS = (":get", ":getLANIP")
+
+    @staticmethod
+    def _router(sm: MagicMock) -> DNS:
+        _answering(sm, {"/sysbus/DNS/Server/Route:get": _ROUTES, "/sysbus/NMC:getLANIP": _LAN_IP})
+        return _make_resource(DNS, sm)
+
+    @pytest.mark.parametrize(
+        "servers,saved,mode",
+        [
+            ([" 1.1.1.1", "192.168.1.53"], [("webuidns1", "1.1.1.1"), ("webuidns2", "192.168.1.53")], "Custom"),
+            (["9.9.9.9", "9.9.9.9"], [("webuidns1", "9.9.9.9"), ("webuidns2", "9.9.9.9")], "Custom"),
+            (["9.9.9.9"], [("webuidns1", "9.9.9.9")], "Custom"),
+            ([], [], "All"),
+        ],
+    )
+    def test_replaces_the_servers_like_the_web_ui(self, mock_session_manager: MagicMock, servers: list, saved: list, mode: str) -> None:
+        self._router(mock_session_manager).set_upstream_servers(servers)
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/DNS/Server:deleteRoute", {"parameters": {"id": "webuidns1", "dns": "192.168.1.53", "commit": True}}),
+            *[("/sysbus/DNS/Server:setRoute", {"parameters": {"id": route, "dns": dns, "commit": True}}) for route, dns in saved],
+            ("/sysbus/DNS:setMode", {"parameters": {"mode": mode}}),
+        ]
+
+    @pytest.mark.parametrize(
+        "servers,message",
+        [
+            (["1.1.1.1", "1.0.0.1", "9.9.9.9"], "at most 2 DNS servers, got 3"),
+            (["dns.google"], "'dns.google' isn't an IPv4 address"),
+            (["2606:4700:4700::1111"], "isn't an IPv4 address"),
+            (["0.0.0.0"], "'0.0.0.0' can't be a DNS server"),
+            (["224.0.0.251"], "reserved or multicast"),
+            (["255.255.255.255"], "reserved or multicast"),
+            (["10.0.0.53"], r"'10.0.0.53' isn't a device in your network \(192.168.1.0/24\)"),
+            (["1.1.1.1", "172.16.0.53"], "'172.16.0.53' isn't a device in your network"),
+            (["192.168.1.0"], "isn't a device in your network"),
+            (["192.168.1.255"], "isn't a device in your network"),
+        ],
+    )
+    def test_checks_the_servers_like_the_web_ui(self, mock_session_manager: MagicMock, servers: list, message: str) -> None:
+        with pytest.raises(ValueError, match=message):
+            self._router(mock_session_manager).set_upstream_servers(servers)
+        assert _sent(mock_session_manager, self.READS) == []
+
 
 # ── DynDNS ────────────────────────────────────────────────────────────
 
@@ -821,6 +971,129 @@ class TestFirewall:
             "/sysbus/Firewall:setDMZ",
             {"parameters": {"id": "webui", "sourceInterface": "data", "destinationIPAddress": "192.168.1.20", "enable": True}},
         )
+
+    def test_delete_all_port_forwarding_then_commit(self, mock_session_manager: MagicMock) -> None:
+        """Without an ID, the router deletes all rules of the origin: those made in the web UI, not by UPnP."""
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.delete_all_port_forwarding()
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/Firewall:deletePortForwarding", {"parameters": {"origin": "webui"}}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    def test_respond_to_ping(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.respond_to_ping()
+        assert _sent(mock_session_manager) == [("/sysbus/Firewall:getRespondToPing", {"parameters": {"sourceInterface": "data"}})]
+
+    @pytest.mark.parametrize(
+        "args,service",
+        [
+            ((False,), {"enableIPv4": False, "enableIPv6": False}),
+            ((True,), {"enableIPv4": True, "enableIPv6": True}),
+            ((False, 4), {"enableIPv4": False, "enableIPv6": True}),
+            ((False, 6), {"enableIPv4": True, "enableIPv6": False}),
+        ],
+    )
+    def test_set_respond_to_ping_keeps_the_other_ip_version(self, mock_session_manager: MagicMock, args: tuple, service: dict) -> None:
+        _answering(mock_session_manager, {"/sysbus/Firewall:getRespondToPing": '{"status": {"enableIPv4": true, "enableIPv6": true}}'})
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_respond_to_ping(*args)
+        assert _sent(mock_session_manager, (":getRespondToPing",)) == [
+            ("/sysbus/Firewall:setRespondToPing", {"parameters": {"sourceInterface": "data", "service_enable": service}})
+        ]
+
+    def test_set_respond_to_ping_checks_the_ip_version(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        with pytest.raises(ValueError, match="ip_version must be 4 or 6, got 5"):
+            svc.set_respond_to_ping(False, 5)  # type: ignore[arg-type]
+        mock_session_manager.post.assert_not_called()
+
+    @pytest.mark.parametrize("method,endpoint", [("protocol_forwarding", "getProtocolForwarding"), ("ipv6_pinholes", "getPinhole")])
+    def test_reads(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        getattr(svc, method)()
+        assert _sent(mock_session_manager) == [(f"/sysbus/Firewall:{endpoint}", {"parameters": {}})]
+
+    @pytest.mark.parametrize("protocol,stored", [("gre", "47"), (" ESP , ah", "50,51"), ("47", "47"), ("0,255", "0,255")])
+    def test_set_protocol_forwarding_then_commit(self, mock_session_manager: MagicMock, protocol: str, stored: str) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_protocol_forwarding("vpn", "192.168.1.20", protocol, enabled=False)
+        parameters = {
+            "id": "vpn",
+            "description": "vpn",
+            "persistent": True,
+            "sourceInterface": "data",
+            "enable": False,
+            "protocol": stored,
+            "destinationIPAddress": "192.168.1.20",
+        }
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/Firewall:setProtocolForwarding", {"parameters": parameters}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    @pytest.mark.parametrize("protocol", ["", "icmp", "256", "-1", "47,", "4.7"])
+    def test_set_protocol_forwarding_checks_the_protocol(self, mock_session_manager: MagicMock, protocol: str) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        with pytest.raises(ValueError, match="protocol must be numbers from 0 to 255"):
+            svc.set_protocol_forwarding("vpn", "192.168.1.20", protocol)
+        mock_session_manager.post.assert_not_called()
+
+    def test_delete_protocol_forwarding_then_commit(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.delete_protocol_forwarding("vpn")
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/Firewall:deleteProtocolForwarding", {"parameters": {"id": "vpn"}}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    @pytest.mark.parametrize("port,protocol,stored", [("25565", "both", ("25565", "6,17")), ("8000 - 8010", "udp", ("8000-8010", "17"))])
+    def test_set_ipv6_pinhole_then_commit(self, mock_session_manager: MagicMock, port: str, protocol: str, stored: tuple) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.set_ipv6_pinhole("minecraft", "2001:DB8:0::20", port, protocol)  # type: ignore[arg-type]
+        parameters = {
+            "id": "minecraft",
+            "description": "minecraft",
+            "origin": "webui",
+            "sourceInterface": "data",
+            "sourcePort": "",
+            "sourcePrefix": "",
+            "destinationPort": stored[0],
+            "destinationIPAddress": "2001:db8::20",
+            "destinationMACAddress": "",
+            "protocol": stored[1],
+            "ipversion": 6,
+            "enable": True,
+            "persistent": True,
+        }
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/Firewall:setPinhole", {"parameters": parameters}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
+
+    @pytest.mark.parametrize(
+        "args,message",
+        [
+            (("192.168.1.20", "80"), "destination_ip must be an IPv6 address, got '192.168.1.20'"),
+            (("2001:db8::20", "0"), "Ports must be between 1 and 65535"),
+            (("2001:db8::20", "http"), "port must be a port such as 443"),
+            (("2001:db8::20", "80", "icmp"), "protocol must be one of"),
+        ],
+    )
+    def test_set_ipv6_pinhole_checks_the_values(self, mock_session_manager: MagicMock, args: tuple, message: str) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        with pytest.raises(ValueError, match=message):
+            svc.set_ipv6_pinhole("web", *args)
+        mock_session_manager.post.assert_not_called()
+
+    def test_delete_ipv6_pinhole_then_commit(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(Firewall, mock_session_manager)
+        svc.delete_ipv6_pinhole("minecraft")
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/Firewall:deletePinhole", {"parameters": {"id": "minecraft", "origin": "webui"}}),
+            ("/sysbus/Firewall:commit", {"parameters": {}}),
+        ]
 
 
 def _custom_rule(rule_id: str, name: str, port: str, target: str = "Drop", protocol: str = "6", mac: str = "", **fields: object) -> dict:
@@ -2320,6 +2593,124 @@ class TestWifiChannel:
         with pytest.raises(ValueError, match=r"The 2.4GHz channel is set by hand \(channel 6\).*set_channel\(\"2.4GHz\", \"auto\"\)"):
             svc.search_channel("2.4GHz")
         assert _sent(mock_session_manager, (":getMIBs",)) == []
+
+
+_WIFI_7 = {"Enabled24GHz": "b,g,n,ax,be", "Enabled5GHz": "a,n,ac,ax,be", "Enabled6GHz": "ax,be", "SupportedStandards": "a,b,g,n,ac,ax"}
+_STANDARDS_URL = "/sysbus/SSW/Steering/MasterConfig/OperatingStandards"
+
+
+class TestWifiSteering:
+    """Band steering, the Wi-Fi standards and the WLAN-Box sync, against a router whose 5 and 2.4 GHz networks share
+    their name and password, and that offers Wi-Fi 7 on every band."""
+
+    READS = (":get", ":getMIBs")
+    MAC = "AA:BB:CC:DD:EE:FF"
+
+    @staticmethod
+    def _router(sm: MagicMock, lan: str | None = None, standards: dict | None = None, stations: object = None) -> Wifi:
+        responses = {
+            "/sysbus/NeMo/Intf/lan:getMIBs": lan or _wlan_mibs({"wl0": _WL0, "wl1": _WL1}),
+            "/sysbus/NeMo/Intf/guest:getMIBs": _wlan_mibs({"wlguest2": _WLGUEST2}),
+            f"{_STANDARDS_URL}:get": json.dumps({"status": _WIFI_7 if standards is None else standards}),
+            "/sysbus/SSW/Steering/ExceptionList/Station:get": json.dumps({"status": stations or {}}),
+        }
+        _answering(sm, responses)
+        return _make_resource(Wifi, sm)
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_steering_enabled(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        self._router(mock_session_manager).set_steering_enabled(enable)
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/SSW/Steering:set", {"parameters": {"Enable": enable}})]
+
+    @pytest.mark.parametrize(
+        "wl1", [("wifi1_bcm", "2.4GHz", "Home-2", "Old-Password-1"), ("wifi1_bcm", "2.4GHz", "Home", "New-Password-2")]
+    )
+    def test_steering_needs_the_same_name_and_password(self, mock_session_manager: MagicMock, wl1: tuple) -> None:
+        """Like the web UI, only to turn it on. The message never contains a password."""
+        svc = self._router(mock_session_manager, lan=_wlan_mibs({"wl0": _WL0, "wl1": wl1}))
+        with pytest.raises(ValueError, match=r"same name and password\. Give them the same with set_network\(\) first") as error:
+            svc.set_steering_enabled(True)
+        assert "Password-" not in str(error.value)
+        assert _sent(mock_session_manager, self.READS) == []
+        svc.set_steering_enabled(False)
+        assert _sent(mock_session_manager, self.READS) == [("/sysbus/SSW/Steering:set", {"parameters": {"Enable": False}})]
+
+    @pytest.mark.parametrize(
+        "band,standard,standards,changes",
+        [
+            ("2.4GHz", 4, _WIFI_7, [("disable", "ax"), ("disable", "be")]),
+            ("5GHz", 6, _WIFI_7, [("disable", "be")]),
+            ("5GHz", 5, _WIFI_7, [("disable", "ax"), ("disable", "be")]),
+            ("6GHz", 6, _WIFI_7, [("disable", "be")]),
+            ("5GHz", 7, _WIFI_7, []),
+            ("2.4GHz", 7, {"Enabled24GHz": "b,g,n"}, [("enable", "ax"), ("enable", "be")]),
+            ("5GHz", 6, {"Enabled5GHz": "a,n,ac,be"}, [("enable", "ax"), ("disable", "be")]),
+            ("6GHz", 7, {}, [("enable", "ax"), ("enable", "be")]),
+        ],
+    )
+    def test_set_standard_one_by_one_like_the_web_ui_on_the_internet_box_4(
+        self, mock_session_manager: MagicMock, band: str, standard: int, standards: dict, changes: list
+    ) -> None:
+        result = self._router(mock_session_manager, standards=standards).set_standard(band, standard)  # type: ignore[arg-type]
+        assert _sent(mock_session_manager) == [
+            (f"{_STANDARDS_URL}:{change}", {"parameters": {"opStd": name, "band": band}}) for change, name in changes
+        ]
+        assert mock_session_manager.post.call_args[0][0] == f"{_STANDARDS_URL}:get"  # the standards after the change
+        assert json.loads(result) == {"status": standards}
+
+    @pytest.mark.parametrize(
+        "band,standard,message",
+        [
+            ("2.4GHz", 5, "The 2.4GHz standard must be one of 7, 6, 4, got 5"),
+            ("5GHz", 4, "The 5GHz standard must be one of 7, 6, 5, got 4"),
+            ("6GHz", 5, "The 6GHz standard must be one of 7, 6, got 5"),
+            ("5GHz", True, "got True"),
+            ("60GHz", 7, 'band must be "2.4GHz", "5GHz" or "6GHz", got \'60GHz\''),
+        ],
+    )
+    def test_set_standard_offers_the_web_ui_standards(
+        self, mock_session_manager: MagicMock, band: str, standard: object, message: str
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            self._router(mock_session_manager).set_standard(band, standard)  # type: ignore[arg-type]
+        mock_session_manager.post.assert_not_called()
+
+    @pytest.mark.parametrize("enable,value", [(True, 1), (False, 0)])
+    def test_set_wlan_box_sync(self, mock_session_manager: MagicMock, enable: bool, value: int) -> None:
+        self._router(mock_session_manager).set_wlan_box_sync(enable)
+        assert _sent(mock_session_manager) == [("/sysbus/SSW/Steering/MasterConfig:set", {"parameters": {"SyncEnableField": value}})]
+
+    @pytest.mark.parametrize(
+        "kwargs,parameters",
+        [
+            ({"steer": False}, {"target": "NoSteer"}),
+            ({"access_point": " Router"}, {"target": "Root", "type": "Force", "forceMode": "TargetAvailable"}),
+            ({"access_point": "aa-bb-cc-00-00-01"}, {"target": "AA:BB:CC:00:00:01", "type": "Force", "forceMode": "TargetAvailable"}),
+        ],
+    )
+    def test_set_device_steering_creates_an_exception(self, mock_session_manager: MagicMock, kwargs: dict, parameters: dict) -> None:
+        self._router(mock_session_manager).set_device_steering("aa:bb:cc:dd:ee:ff", **kwargs)
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/SSW/Steering/ExceptionList:createException", {"parameters": {"MAC": self.MAC, "mask": 6, **parameters}})
+        ]
+
+    @pytest.mark.parametrize("stations", [{"1": {"MAC": "AA:BB:CC:DD:EE:FF", "Target": "NoSteer"}}, [{"MAC": "aa:bb:cc:dd:ee:ff"}]])
+    def test_set_device_steering_deletes_the_exception(self, mock_session_manager: MagicMock, stations: object) -> None:
+        self._router(mock_session_manager, stations=stations).set_device_steering("AA-BB-CC-DD-EE-FF")
+        assert _sent(mock_session_manager) == [
+            ("/sysbus/SSW/Steering/ExceptionList:deleteException", {"parameters": {"MAC": self.MAC, "mask": 6}})
+        ]
+
+    def test_set_device_steering_without_an_exception(self, mock_session_manager: MagicMock) -> None:
+        stations = {"1": {"MAC": "AA:BB:CC:00:00:01", "Target": "NoSteer"}}
+        result = self._router(mock_session_manager, stations=stations).set_device_steering(self.MAC)
+        assert json.loads(result) == {"status": stations}
+        assert _sent(mock_session_manager) == []
+
+    def test_set_device_steering_access_point_needs_steer(self, mock_session_manager: MagicMock) -> None:
+        with pytest.raises(ValueError, match="access_point only applies to devices that band steering moves"):
+            self._router(mock_session_manager).set_device_steering(self.MAC, steer=False, access_point="router")
+        mock_session_manager.post.assert_not_called()
 
 
 # ── WireGuard ─────────────────────────────────────────────────────────

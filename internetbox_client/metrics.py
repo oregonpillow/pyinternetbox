@@ -252,6 +252,33 @@ def register_metrics(collector: InternetBoxCollector, client: InternetBoxClient)
                 description="DNS server enabled (1) or disabled (0)",
             )
 
+    # ── DNS queries (cumulative counters since the router booted) ─────
+    dns_totals = {
+        "dns_local_answered": "DNS queries the Internet Box answered itself (from its cache or its own records) since it last booted",
+        "dns_queries_forwarded": "DNS queries the Internet Box passed on to a DNS server since it last booted",
+        "dns_cache_inserted": "Answers added to the Internet Box's DNS cache since it last booted",
+        "dns_cache_live_freed": "Unexpired answers dropped from the Internet Box's DNS cache to make room since it last booted",
+    }
+    dns_per_server = {
+        "dns_queries_sent": "DNS queries the Internet Box sent to this DNS server since it last booted",
+        "dns_queries_failed": "DNS queries to this DNS server that failed since the Internet Box last booted",
+        "dns_queries_retried": "DNS queries to this DNS server that were retried since the Internet Box last booted",
+    }
+
+    @collector.register_collector
+    def collect_dns_queries(col: InternetBoxCollector) -> None:
+        stats = json.loads(client.dns.metrics()).get("status", {})
+        for key, description in dns_totals.items():
+            if key in stats:
+                col.update_counter(name=f"internetbox_{key}", value=stats[key], labels=None, description=description)
+        # Each DNS server the router passes queries on to has its own entry, keyed by its address.
+        for server, counts in stats.items():
+            if not isinstance(counts, dict):
+                continue
+            for key, description in dns_per_server.items():
+                if key in counts:
+                    col.update_counter(name=f"internetbox_{key}", value=counts[key], labels={"server": server}, description=description)
+
     # ── Crash Reports ───────────────────────────────────────────
     @collector.register_collector
     def collect_crash_reports(col: InternetBoxCollector) -> None:

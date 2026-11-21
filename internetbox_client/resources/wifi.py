@@ -7,12 +7,20 @@ from typing import Literal
 import requests
 
 from internetbox_client.utils.APIClient import APIClient
+from internetbox_client.utils.helpers import normalize_mac
 from internetbox_client.utils.labels import disruptive, write
 
 # The web UI offers these 5 GHz channels, though the radio supports more. 52 to 112 are DFS channels.
 _5GHZ_CHANNELS = (36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112)
 # The web UI's channel widths. 5 GHz "Auto" is 80 or 160 MHz.
 _BANDWIDTHS = {"2.4GHz": ("20MHz", "40MHz"), "5GHz": ("80MHz", "Auto")}
+# The Wi-Fi standards the web UI offers, by band and newest standard: 4 is its "Wi-Fi 4 and lower", 5 "Wi-Fi 5 and lower".
+_STANDARDS = {
+    "2.4GHz": {7: "b,g,n,ax,be", 6: "b,g,n,ax", 4: "b,g,n"},
+    "5GHz": {7: "a,n,ac,ax,be", 6: "a,n,ac,ax", 5: "a,n,ac"},
+    "6GHz": {7: "ax,be", 6: "ax"},
+}
+_STANDARD_FIELDS = {"2.4GHz": "Enabled24GHz", "5GHz": "Enabled5GHz", "6GHz": "Enabled6GHz"}
 
 
 def _check_ssid(ssid: str, network: str) -> None:
@@ -424,9 +432,39 @@ class Wifi(APIClient):
             self.post(f"/sysbus/SSW/DataElements/Network/SSID/{name}:set", data)
 
     def steering(self) -> str:
-        """Get Wi-Fi steering status"""
+        """Get whether band steering is on ("Enable")."""
         data = {"parameters": {}}
         return self.post("/sysbus/SSW/Steering:get", data)
+
+    @disruptive
+    def set_steering_enabled(self, enable: bool) -> str:
+        """Turn band steering on or off, like the WLAN steering switch in the web UI.
+
+        With band steering on, the router moves wireless devices to the band, or WLAN-Box, that suits them best, e.g.
+        by signal strength and load. Devices may lose their connection for a moment when they're moved. It only works
+        if the 2.4 and 5 GHz networks have the same name and password. set_device_steering() leaves out single devices.
+
+        Args:
+            enable (bool): True to turn band steering on, False to turn it off.
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: when turning it on while the 2.4 and 5 GHz networks have different names or passwords, like
+                the web UI. set_network() gives them the same.
+
+        """
+        if enable:
+            bands = {access_point.get("Band"): access_point for access_point in self._access_points()[0].values()}
+            low, high = bands.get("2.4GHz"), bands.get("5GHz")
+            if low and high and (low.get("SSID") != high.get("SSID") or _password(low) != _password(high)):
+                raise ValueError(
+                    "Band steering only works if the 2.4 and 5 GHz networks have the same name and password. "
+                    "Give them the same with set_network() first."
+                )
+        data = {"parameters": {"Enable": enable}}
+        return self.post("/sysbus/SSW/Steering:set", data)
 
     def ssid(self) -> str:
         """Get Wi-Fi SSID"""
@@ -566,14 +604,68 @@ class Wifi(APIClient):
         return self.post("/sysbus/NeMo/Intf/guest:getMIBs", data)
 
     def steering_master_config(self) -> str:
-        """Get Wi-Fi steering master configuration"""
+        """Get the settings band steering shares with WLAN-Boxes, e.g. whether they follow the router's Wi-Fi switch
+        and schedule ("SyncEnableField")."""
         data = {"parameters": {}}
         return self.post("/sysbus/SSW/Steering/MasterConfig:get", data)
 
+    @write
+    def set_wlan_box_sync(self, enable: bool) -> str:
+        """Choose whether WLAN-Boxes turn their Wi-Fi on and off with the router's, like the web UI's setting to
+        synchronise the WLAN status between the Internet-Box and the WLAN-Boxes.
+
+        Off lets you turn off the router's Wi-Fi, e.g. when it's in a cellar, while the WLAN-Boxes keep theirs on:
+        set_enabled() and the Wi-Fi schedule then only control the router's Wi-Fi. Without WLAN-Boxes it changes
+        nothing.
+
+        Args:
+            enable (bool): True (the default setting) to synchronise, False to let the WLAN-Boxes' Wi-Fi stay on.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"SyncEnableField": 1 if enable else 0}}
+        return self.post("/sysbus/SSW/Steering/MasterConfig:set", data)
+
     def steering_operating_standards(self) -> str:
-        """Get Wi-Fi steering operating standards"""
+        """Get the Wi-Fi standards each band offers, e.g. "Enabled5GHz": "a,n,ac,ax,be" (be is Wi-Fi 7)."""
         data = {"parameters": {}}
         return self.post("/sysbus/SSW/Steering/MasterConfig/OperatingStandards:get", data)
+
+    @disruptive
+    def set_standard(self, band: Literal["2.4GHz", "5GHz", "6GHz"], standard: Literal[4, 5, 6, 7]) -> str:
+        """Set the newest Wi-Fi standard a band offers, like the WLAN standard setting in the web UI's Wi-Fi settings.
+        The Internet Box 3 and 4's web UI only offers these choices with a WLAN-Box 4 or 5, and otherwise a Wi-Fi 6
+        switch.
+
+        Older devices can always connect. Newer ones then use the newest standard the band offers: e.g. 6 turns off
+        Wi-Fi 7. Devices on the band may lose their connection for a moment. WLAN-Boxes get the same setting.
+
+        Args:
+            band (str): "2.4GHz", "5GHz", or "6GHz" (on the Internet Box 4, only WLAN-Boxes have 6 GHz).
+            standard (int): 7 for Wi-Fi 7, 6 for Wi-Fi 6, 4 on 2.4 GHz for Wi-Fi 4 and older, or 5 on 5 GHz for Wi-Fi 5
+                and older. 6 GHz offers 7 and 6 only.
+
+        Returns:
+            str: the standards each band offers now, as from steering_operating_standards()
+
+        Raises:
+            ValueError: if the web UI doesn't offer the standard on this band.
+
+        """
+        if band not in _STANDARDS:
+            raise ValueError(f'band must be "2.4GHz", "5GHz" or "6GHz", got {band!r}')
+        if isinstance(standard, bool) or standard not in _STANDARDS[band]:
+            raise ValueError(f"The {band} standard must be one of {', '.join(map(str, _STANDARDS[band]))}, got {standard!r}")
+        current = (json.loads(self.steering_operating_standards()).get("status") or {}).get(_STANDARD_FIELDS[band]) or ""
+        old, new = [s for s in current.split(",") if s], _STANDARDS[band][standard].split(",")
+        # Each standard on its own, like the web UI on the Internet Box 3 and 4. On other models it uses OperatingStandards:set.
+        changes = [("/sysbus/SSW/Steering/MasterConfig/OperatingStandards:enable", s) for s in new if s not in old]
+        changes += [("/sysbus/SSW/Steering/MasterConfig/OperatingStandards:disable", s) for s in old if s not in new]
+        for url, name in changes:
+            self.post(url, {"parameters": {"opStd": name, "band": band}})
+        return self.steering_operating_standards()
 
     def steering_log(self) -> str:
         """Get Wi-Fi steering log attempts"""
@@ -586,9 +678,42 @@ class Wifi(APIClient):
         return self.post("/sysbus/SSW/Steering/Radio:get", data)
 
     def steering_exception_list(self) -> str:
-        """Get Wi-Fi steering exception list"""
+        """Get the devices band steering treats differently, as set with set_device_steering() or in the web UI."""
         data = {"parameters": {}}
         return self.post("/sysbus/SSW/Steering/ExceptionList/Station:get", data)
+
+    @write
+    def set_device_steering(self, mac: str, steer: bool = True, access_point: str | None = None) -> str:
+        """Choose how band steering treats a device, like the web UI's band steering settings per device.
+
+        Args:
+            mac (str): MAC address of a wireless device.
+            steer (bool): False leaves the device out of band steering: it stays on the band it picks. True (default)
+                lets band steering move it, as it does every other device.
+            access_point (str | None): with steer, keep the device on this access point while it's in reach, like the
+                web UI's preferred access point: "router" for the Internet-Box, or a WLAN-Box's MAC address. Default:
+                band steering chooses.
+
+        Returns:
+            str: response content, or the exception list from steering_exception_list() if there was nothing to change
+
+        """
+        mac = normalize_mac(mac)
+        if not steer and access_point is not None:
+            raise ValueError("access_point only applies to devices that band steering moves (steer=True).")
+        if steer and access_point is None:
+            # Like every other device: no exception.
+            current = self.steering_exception_list()
+            stations = json.loads(current).get("status") or {}
+            stations = list(stations.values()) if isinstance(stations, dict) else stations
+            if not any(str(station.get("MAC")).upper() == mac for station in stations):
+                return current
+            return self.post("/sysbus/SSW/Steering/ExceptionList:deleteException", {"parameters": {"MAC": mac, "mask": 6}})
+        parameters: dict = {"MAC": mac, "mask": 6, "target": "NoSteer"}
+        if access_point is not None:
+            target = "Root" if access_point.strip().lower() == "router" else normalize_mac(access_point)
+            parameters |= {"target": target, "type": "Force", "forceMode": "TargetAvailable"}
+        return self.post("/sysbus/SSW/Steering/ExceptionList:createException", {"parameters": parameters})
 
     def activation_timer(self) -> str:
         """Get Wi-Fi activation timer"""

@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import re
 import time
@@ -8,6 +9,8 @@ from internetbox_client.utils.helpers import normalize_mac
 from internetbox_client.utils.labels import disruptive, write
 
 _PROTOCOLS = {"tcp": "6", "udp": "17", "both": "6,17"}
+# IP protocols without ports, by name, for protocol forwarding.
+_IP_PROTOCOLS = {"gre": "47", "esp": "50", "ah": "51"}
 _ACTIONS = {"allow": "Accept", "block": "Drop"}
 # The custom rule chains, by IP version and direction. IPv4 rules are outbound only.
 _CHAINS = {(4, "outbound"): "Custom", (6, "outbound"): "Custom_V6Out", (6, "inbound"): "Custom_V6In"}
@@ -34,6 +37,17 @@ def _port_range(port: int | str) -> tuple[int, int]:
     if match[2] and last <= first:
         raise ValueError(f"A port range must go from a lower to a higher port, got {port!r}")
     return first, last
+
+
+def _ip_protocols(protocol: str) -> str:
+    """Protocols such as "gre" or "47,50" as the router stores them, e.g. "47,50"."""
+    numbers = []
+    for part in str(protocol).split(","):
+        number = _IP_PROTOCOLS.get(part.strip().lower(), part.strip())
+        if not number.isdigit() or int(number) > 255:
+            raise ValueError(f'protocol must be numbers from 0 to 255 or "gre", "esp" or "ah", separated by commas, got {protocol!r}')
+        numbers.append(str(int(number)))
+    return ",".join(numbers)
 
 
 def _rule_ports(rule: dict) -> tuple[int, int]:
@@ -222,6 +236,163 @@ class Firewall(APIClient):
         """
         data = {"parameters": {"id": name, "origin": "webui"}}
         result = self.post("/sysbus/Firewall:deletePortForwarding", data)
+        self._commit()
+        return result
+
+    @write
+    def delete_all_port_forwarding(self) -> str:
+        """Delete all port forwarding rules created in the web UI or with set_port_forwarding(). They can't be brought
+        back. Ports that devices opened themselves with UPnP stay open.
+
+        Returns:
+            str: response content
+
+        """
+        result = self.post("/sysbus/Firewall:deletePortForwarding", {"parameters": {"origin": "webui"}})
+        self._commit()
+        return result
+
+    def respond_to_ping(self) -> str:
+        """Get whether the router answers pings from the internet, over IPv4 ("enableIPv4") and IPv6 ("enableIPv6")."""
+        data = {"parameters": {"sourceInterface": "data"}}
+        return self.post("/sysbus/Firewall:getRespondToPing", data)
+
+    @write
+    def set_respond_to_ping(self, enable: bool, ip_version: Literal[4, 6] | None = None) -> str:
+        """Choose whether the router answers pings from the internet.
+
+        Args:
+            enable (bool): True to answer pings, False to ignore them.
+            ip_version (int | None): 4 or 6 to change only IPv4 or IPv6. Default: both.
+
+        Returns:
+            str: response content
+
+        """
+        if ip_version not in (None, 4, 6):
+            raise ValueError(f"ip_version must be 4 or 6, got {ip_version!r}")
+        service = {"enableIPv4": enable, "enableIPv6": enable}
+        if ip_version is not None:
+            other = f"enableIPv{10 - ip_version}"  # the IP version that stays as it is
+            service[other] = bool((json.loads(self.respond_to_ping()).get("status") or {}).get(other))
+        data = {"parameters": {"sourceInterface": "data", "service_enable": service}}
+        return self.post("/sysbus/Firewall:setRespondToPing", data)
+
+    def protocol_forwarding(self) -> str:
+        """Get the protocol forwarding rules: whole IP protocols, e.g. GRE, forwarded from the internet to a device."""
+        data = {"parameters": {}}
+        return self.post("/sysbus/Firewall:getProtocolForwarding", data)
+
+    @write
+    def set_protocol_forwarding(self, name: str, destination_ip: str, protocol: str, enabled: bool = True) -> str:
+        """Forward a whole IP protocol from the internet to a device, or update the rule with this name.
+
+        Port forwarding forwards TCP and UDP ports; this forwards protocols without ports, e.g. GRE for a PPTP VPN
+        server or ESP for an IPsec one.
+
+        Args:
+            name (str): rule name, e.g. "vpn".
+            destination_ip (str): LAN IP address of the device to forward to, e.g. "192.168.1.20".
+            protocol (str): a protocol number from 0 to 255 or "gre", "esp" or "ah", or several separated by commas,
+                e.g. "esp,ah".
+            enabled (bool): whether the rule is active. Default is True.
+
+        Returns:
+            str: response content
+
+        """
+        parameters = {
+            "id": name,
+            "description": name,
+            "persistent": True,
+            "sourceInterface": "data",
+            "enable": enabled,
+            "protocol": _ip_protocols(protocol),
+            "destinationIPAddress": destination_ip,
+        }
+        result = self.post("/sysbus/Firewall:setProtocolForwarding", {"parameters": parameters})
+        self._commit()
+        return result
+
+    @write
+    def delete_protocol_forwarding(self, name: str) -> str:
+        """Delete a protocol forwarding rule.
+
+        Args:
+            name (str): rule name, as given to set_protocol_forwarding().
+
+        Returns:
+            str: response content
+
+        """
+        result = self.post("/sysbus/Firewall:deleteProtocolForwarding", {"parameters": {"id": name}})
+        self._commit()
+        return result
+
+    def ipv6_pinholes(self) -> str:
+        """Get the IPv6 pinholes: ports open from the internet to a device's IPv6 address."""
+        data = {"parameters": {}}
+        return self.post("/sysbus/Firewall:getPinhole", data)
+
+    @write
+    def set_ipv6_pinhole(
+        self, name: str, destination_ip: str, port: str, protocol: Literal["tcp", "udp", "both"] = "both", enabled: bool = True
+    ) -> str:
+        """Open a port from the internet to a device's IPv6 address (a pinhole), or update the pinhole with this name.
+
+        IPv6 needs no port forwarding: devices have their own public IPv6 addresses, which the firewall protects. A
+        pinhole lets connections to one port of one address through.
+
+        Args:
+            name (str): pinhole name, e.g. "minecraft".
+            destination_ip (str): the device's public IPv6 address, e.g. "2001:db8::20". devices.summary() and get()
+                list devices' addresses.
+            port (str): port, e.g. "25565", or a range such as "8000-8010".
+            protocol (str): "tcp", "udp" or "both". Default is "both".
+            enabled (bool): whether the pinhole is open. Default is True.
+
+        Returns:
+            str: response content
+
+        """
+        if protocol not in _PROTOCOLS:
+            raise ValueError(f"protocol must be one of {list(_PROTOCOLS)}, got {protocol!r}")
+        try:
+            address = ipaddress.IPv6Address(destination_ip.strip())
+        except ValueError:
+            raise ValueError(f"destination_ip must be an IPv6 address, got {destination_ip!r}") from None
+        first, last = _port_range(port)
+        parameters = {
+            "id": name,
+            "description": name,
+            "origin": "webui",
+            "sourceInterface": "data",
+            "sourcePort": "",
+            "sourcePrefix": "",
+            "destinationPort": f"{first}-{last}" if last != first else str(first),
+            "destinationIPAddress": str(address),
+            "destinationMACAddress": "",
+            "protocol": _PROTOCOLS[protocol],
+            "ipversion": 6,
+            "enable": enabled,
+            "persistent": True,
+        }
+        result = self.post("/sysbus/Firewall:setPinhole", {"parameters": parameters})
+        self._commit()
+        return result
+
+    @write
+    def delete_ipv6_pinhole(self, name: str) -> str:
+        """Delete an IPv6 pinhole.
+
+        Args:
+            name (str): pinhole name, as given to set_ipv6_pinhole().
+
+        Returns:
+            str: response content
+
+        """
+        result = self.post("/sysbus/Firewall:deletePinhole", {"parameters": {"id": name, "origin": "webui"}})
         self._commit()
         return result
 

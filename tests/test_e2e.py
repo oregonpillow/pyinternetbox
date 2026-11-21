@@ -17,15 +17,16 @@ To also run destructive tests (write to the router)::
 
 Tests that change settings are marked ``@pytest.mark.destructive``. They leave the configuration as they found it:
 they write the current value back (LED brightness, Wi-Fi TX power, firewall levels and basic actions, UPnP, WPS, DNS
-servers for devices, 6 GHz power saving), or create something temporary and delete it again (a disabled port
-forwarding rule, custom firewall rule and DynDNS host and a phone book contact named after ``DUMMY_RULE``, a WireGuard
-client, a static route to an unused network, and a device entry, IP address reservation, schedule and time limit for
-``FAKE_MAC``, which no real device uses). They skip rather than touch existing settings, e.g. a DMZ host or calls in
-the call list.
+servers for devices, the DNS cache switch, ping replies, WLAN-Box sync, 6 GHz power saving), or create something
+temporary and delete it again (a disabled port forwarding rule, protocol forwarding rule, IPv6 pinhole, custom firewall
+rule and DynDNS host and a phone book contact named after ``DUMMY_RULE``, a WireGuard client, a static route to an
+unused network, and a device entry with a type and DNS name, IP address reservation, schedule, time limit and band
+steering exception for ``FAKE_MAC``, which no real device uses). They skip rather than touch existing settings, e.g. a
+DMZ host or calls in the call list. Saving the log files replaces the ones saved on the router before.
 
-Tests that interrupt the network for everyone, such as turning Wi-Fi off and on, writing the Wi-Fi names or channels
-back or saving a Wi-Fi schedule, are also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1``
-is set.
+Tests that interrupt the network for everyone, such as turning Wi-Fi off and on, writing the Wi-Fi names or channels,
+band steering switch or the router's DNS servers back, changing a Wi-Fi standard and back, or saving a Wi-Fi schedule,
+are also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is set.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ import pytest
 import requests
 
 from internetbox_client.resources import *  # noqa: F403
+from internetbox_client.resources.wifi import _STANDARDS, _STANDARD_FIELDS
 from internetbox_client.utils.APIClient import SessionManager
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -95,6 +97,18 @@ def _free_addresses(sm) -> list[str]:
         used |= {rule["DestinationIPAddress"] for rule in rules.values()}
     network = ipaddress.ip_network(f"{lan['Address']}/{lan['Netmask']}", strict=False)
     return [str(host) for host in reversed(list(network.hosts())) if int(host) not in pool and str(host) not in used]
+
+
+def _unused_ipv6(sm) -> str | None:
+    """An address in the home network's IPv6 prefix that no device uses, or None without one."""
+    used = {address.get("Address") for device in _lan_devices(sm) for address in device.get("IPv6Address") or []}
+    for prefix in (json.loads(_make(DHCP, sm).ipv6_prefix_information()).get("status") or {}).values():
+        if prefix.get("Enable") and prefix.get("Prefix"):
+            network = ipaddress.IPv6Network(f"{prefix['Prefix']}/{prefix['PrefixLength']}", strict=False)
+            free = [str(network[0xE2E0 + offset]) for offset in range(16) if str(network[0xE2E0 + offset]) not in used]
+            if free:
+                return free[0]
+    return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -282,6 +296,13 @@ class TestE2EDebug:
     def test_wifi_driver_stats(self, svc):
         _ok(svc.wifi_driver_stats())
 
+    @pytest.mark.destructive
+    def test_save_logs(self, svc):
+        """Save Wi-Fi debug information and a log file on the router, replacing the ones saved there before."""
+        _no_errors(svc.save_wifi_logs())
+        _no_errors(svc.save_log_file())
+        assert _wait_for(lambda: _payload(svc.status())["FileStatus"] == "Ready", timeout=60)
+
 
 # ── DECT ──────────────────────────────────────────────────────────────────────
 
@@ -363,6 +384,36 @@ class TestE2EDevices:
             assert _wait_for(lambda: device()["Name"] == "pyinternetbox-e2e")
             _no_errors(svc.remove(fake_mac))
             assert device() is None
+        finally:
+            _forget(sm, fake_mac)
+        assert _uses(sm, fake_mac) == []
+
+    @pytest.mark.destructive
+    def test_type_and_names(self, svc, sm, fake_mac, free_ip):
+        """Give FAKE_MAC a device entry, change its type, name and DNS name, and remove it."""
+
+        def device() -> dict:
+            return next((d for d in _lan_devices(sm) if d["Key"] == fake_mac), {})
+
+        def dns_names() -> list[str]:
+            return [name.get("Name") for name in device().get("Names") or [] if name.get("Source") == "dns"]
+
+        try:
+            _no_errors(_make(DHCP, sm).add_static_lease(fake_mac, free_ip))
+            assert _wait_for(lambda: bool(device()))
+            found_name = device()["Name"]
+            _no_errors(svc.set_type(fake_mac, "printer"))
+            assert _wait_for(lambda: device().get("DeviceType") == "printer")
+            _no_errors(svc.rename(fake_mac, DUMMY_RULE))
+            assert _wait_for(lambda: device()["Name"] == DUMMY_RULE)
+            _no_errors(svc.reset_name(fake_mac))
+            assert _wait_for(lambda: device()["Name"] == found_name)
+            _no_errors(svc.set_dns_name(fake_mac, DUMMY_RULE))
+            assert _wait_for(lambda: dns_names() == [DUMMY_RULE])
+            _no_errors(svc.remove_dns_name(fake_mac))
+            assert _wait_for(lambda: dns_names() == [])
+            with pytest.raises(ValueError, match="no traffic history"):  # it never connected
+                svc.clear_traffic_history(fake_mac)
         finally:
             _forget(sm, fake_mac)
         assert _uses(sm, fake_mac) == []
@@ -472,6 +523,28 @@ class TestE2EDNS:
     @pytest.mark.destructive
     def test_flush_cache(self, svc):
         _no_errors(svc.flush_cache())
+
+    def test_metrics(self, svc):
+        assert {"dns_local_answered", "dns_queries_forwarded"} <= _payload(svc.metrics()).keys()
+
+    @pytest.mark.destructive
+    def test_set_cache_enabled_reverts(self, svc):
+        """Write the DNS cache switch back: effective no-op, though the cache is emptied."""
+        enabled = _payload(svc.cache())["Enable"]
+        _no_errors(svc.set_cache_enabled(enabled))
+        assert _payload(svc.cache())["Enable"] is enabled
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_upstream_servers_reverts(self, svc):
+        """Write the DNS servers the router asks back. Devices can't look up names for a moment while they're replaced."""
+        mode, routes = _payload(svc.mode())["Mode"], _payload(svc.settings())
+        servers = [routes[route]["DNS"] for route in ("webuidns1", "webuidns2") if route in routes]
+        if mode not in ("Custom", "All") or (mode == "Custom") != bool(servers):
+            pytest.skip(f"DNS mode {mode!r} with {len(servers)} servers isn't a setting the web UI makes; not touching it")
+        _no_errors(svc.set_upstream_servers(servers))
+        # The router turns the servers on a moment after the mode is set.
+        assert _wait_for(lambda: (_payload(svc.mode())["Mode"], _payload(svc.settings())) == (mode, routes))
 
 
 # ── DynDNS ────────────────────────────────────────────────────────────────────
@@ -707,6 +780,78 @@ class TestE2EFirewall:
         enabled = _payload(svc.status())["UpnpPortForwardingEnable"]
         assert _no_errors(svc.set_upnp_enabled(enabled))["status"] is True
         assert _payload(svc.status())["UpnpPortForwardingEnable"] is enabled
+
+    def test_respond_to_ping(self, svc):
+        assert set(_payload(svc.respond_to_ping())) == {"enableIPv4", "enableIPv6"}
+
+    @pytest.mark.destructive
+    def test_set_respond_to_ping_reverts(self, svc):
+        """Write each IP version's ping setting back: effective no-op."""
+        before = _payload(svc.respond_to_ping())
+        _no_errors(svc.set_respond_to_ping(before["enableIPv4"], 4))
+        _no_errors(svc.set_respond_to_ping(before["enableIPv6"], 6))
+        assert _payload(svc.respond_to_ping()) == before
+
+    def test_protocol_forwarding(self, svc):
+        _ok(svc.protocol_forwarding())
+
+    @pytest.mark.destructive
+    def test_protocol_forwarding_add_update_delete(self, svc, free_ip):
+        """Add a disabled dummy rule to an unused address, change it and delete it, leaving the other rules untouched."""
+
+        def rules() -> dict:
+            return json.loads(svc.protocol_forwarding())["status"]
+
+        def dummy() -> dict[str, tuple]:
+            fields = ("Enable", "Protocol", "DestinationIPAddress")
+            return {
+                rule_id: tuple(rule.get(f) for f in fields) for rule_id, rule in rules().items() if rule.get("Description") == DUMMY_RULE
+            }
+
+        before = rules()
+        assert not dummy()
+        try:
+            _no_errors(svc.set_protocol_forwarding(DUMMY_RULE, free_ip, "gre", enabled=False))
+            assert list(dummy().values()) == [(False, "47", free_ip)]
+            _no_errors(svc.set_protocol_forwarding(DUMMY_RULE, free_ip, "esp,ah", enabled=False))
+            assert list(dummy().values()) == [(False, "50,51", free_ip)]
+            _no_errors(svc.delete_protocol_forwarding(DUMMY_RULE))
+            assert not dummy()
+        finally:
+            for rule_id in dummy():
+                svc.delete_protocol_forwarding(rule_id)
+        assert rules() == before
+
+    def test_ipv6_pinholes(self, svc):
+        _ok(svc.ipv6_pinholes())
+
+    @pytest.mark.destructive
+    def test_ipv6_pinhole_add_update_delete(self, svc, sm):
+        """Add a closed dummy pinhole to an unused IPv6 address, change it and delete it, leaving the others untouched."""
+        address = _unused_ipv6(sm)
+        if address is None:
+            pytest.skip("The home network has no IPv6 prefix")
+
+        def pinholes() -> dict:
+            return json.loads(svc.ipv6_pinholes())["status"]
+
+        def dummy() -> dict[str, tuple]:
+            fields = ("Enable", "Protocol", "DestinationPort", "DestinationIPAddress")
+            return {key: tuple(rule.get(f) for f in fields) for key, rule in pinholes().items() if rule.get("Description") == DUMMY_RULE}
+
+        before = pinholes()
+        assert not dummy()
+        try:
+            _no_errors(svc.set_ipv6_pinhole(DUMMY_RULE, address, "65001", "tcp", enabled=False))
+            assert list(dummy().values()) == [(False, "6", "65001", address)]
+            _no_errors(svc.set_ipv6_pinhole(DUMMY_RULE, address, "65001-65002", enabled=False))
+            assert list(dummy().values()) == [(False, "6,17", "65001-65002", address)]
+            _no_errors(svc.delete_ipv6_pinhole(DUMMY_RULE))
+            assert not dummy()
+        finally:
+            for key in dummy():
+                svc.delete_ipv6_pinhole(key)
+        assert pinholes() == before
 
 
 # ── GenLog ────────────────────────────────────────────────────────────────────
@@ -1492,6 +1637,71 @@ class TestE2EWifi:
             pytest.skip(f"The {band} channel is set by hand; not changing that")
         _no_errors(svc.search_channel(band))
         assert svc._radio(band)[2]["AutoChannelEnable"] is True
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_steering_enabled_reverts(self, svc):
+        """Write the band steering switch back: devices may be moved meanwhile."""
+        enabled = _payload(svc.steering())["Enable"]
+        try:
+            _no_errors(svc.set_steering_enabled(enabled))
+        except ValueError as error:  # on, though the 2.4 and 5 GHz networks differ: the web UI wouldn't turn it on
+            pytest.skip(str(error))
+        assert _payload(svc.steering())["Enable"] is enabled
+
+    @pytest.mark.destructive
+    def test_set_wlan_box_sync_reverts(self, svc):
+        """Write the WLAN-Box sync setting back: effective no-op."""
+        enabled = bool(_payload(svc.steering_master_config())["SyncEnableField"])
+        _no_errors(svc.set_wlan_box_sync(enabled))
+        assert bool(_payload(svc.steering_master_config())["SyncEnableField"]) is enabled
+
+    @pytest.mark.parametrize("band", ["2.4GHz", "5GHz", "6GHz"])
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_standard_change_and_back(self, svc, sm, band):
+        """Offer another Wi-Fi standard on the band, then the one before: its devices may reconnect meanwhile."""
+        if not _runner_is_wired(sm):
+            pytest.skip("This machine isn't wired to the router, so it could lose its connection")
+
+        def standards() -> dict[str, object]:
+            """The standards, with each band's as a set: the router may list them in another order."""
+            fields = _STANDARD_FIELDS.values()
+            return {k: set(v.split(",")) if k in fields else v for k, v in _payload(svc.steering_operating_standards()).items()}
+
+        before, field = standards(), _STANDARD_FIELDS[band]
+        current = next((standard for standard, offered in _STANDARDS[band].items() if set(offered.split(",")) == before.get(field)), None)
+        if current is None:
+            pytest.skip(f"The {band} standards aren't one of the web UI's choices; not changing them")
+        other = next(standard for standard in _STANDARDS[band] if standard != current)
+        try:
+            changed = _payload(svc.set_standard(band, other))
+            assert set(changed[field].split(",")) == set(_STANDARDS[band][other].split(","))
+        finally:
+            svc.set_standard(band, current)
+        assert standards() == before
+
+    @pytest.mark.destructive
+    def test_set_device_steering(self, svc, fake_mac):
+        """Leave FAKE_MAC out of band steering, keep it on the router, then let band steering move it again."""
+
+        def targets() -> list[str]:
+            stations = _payload(svc.steering_exception_list())
+            stations = stations.values() if isinstance(stations, dict) else stations
+            return [station.get("Target") for station in stations if str(station.get("MAC")).upper() == fake_mac]
+
+        before = _payload(svc.steering_exception_list())
+        try:
+            _no_errors(svc.set_device_steering(fake_mac, steer=False))
+            assert targets() == ["NoSteer"]
+            _no_errors(svc.set_device_steering(fake_mac, access_point="router"))
+            assert targets() == ["Root"]
+            _no_errors(svc.set_device_steering(fake_mac))
+            assert targets() == []
+        finally:
+            if targets():
+                svc.post("/sysbus/SSW/Steering/ExceptionList:deleteException", {"parameters": {"MAC": fake_mac, "mask": 6}})
+        assert _payload(svc.steering_exception_list()) == before
 
 
 # ── Wireguard ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
+
+import requests
 
 from internetbox_client.resources.dhcp import DHCP
 from internetbox_client.resources.mst import MST, _mst_id
@@ -8,6 +11,19 @@ from internetbox_client.resources.scheduler import WEEK, Scheduler
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
 from internetbox_client.utils.labels import write
+
+# The device types the web UI offers for its device icons, from its settings (/static/settings/application.json).
+DEVICE_TYPES = (
+    "generic", "computer", "laptop", "tv", "storage", "dect", "smartphone", "tablette", "ipad", "gameconsole", "printer", "avplayer",
+    "chromecast", "wlan box", "starwifi5", "starwifi5pro", "imaging", "liveradio", "speaker", "sonos-speaker", "generic-speaker",
+    "wireless repeater", "miscellaneous", "tv box", "tv box ip1800", "tv box ip2000", "tv box ip2300", "apple-tv", "dect repeater",
+    "ethernet switch", "circle-camera", "camera", "video-camera", "homeplug", "swisscom smart switch", "ha-switch", "bulb", "lamp-1",
+    "lamp-2", "lamp-3", "lamp-4", "lamp-5", "led-strip", "xmas-tree", "ule", "small-button", "netatmo-outdoor", "netatmo-additional",
+    "netatmo-indoor", "coffee-maker", "fan", "gigaset", "motion-sensor", "heating", "smart-watch", "remote-control", "white-goods",
+    "irobot", "square", "circle", "triangle",
+)  # fmt: skip
+# The GenLog topics the web UI clears to reset a device's traffic history. The Internet-Box 4 only keeps "network".
+_TRAFFIC_LOGS = ("network", "network_persistent")
 
 
 def _device_key(key: str) -> str:
@@ -142,6 +158,126 @@ class Devices(APIClient):
         """
         data = {"service": f"Devices.Device.{_device_key(key)}", "method": "set", "parameters": {"parameters": {"Name": name}}}
         return self.post("/ws", data)
+
+    @write
+    def reset_name(self, key: str) -> str:
+        """Remove the name given to a device in the web UI or with rename(), so it gets the name it was found with
+        again, e.g. the one it gives the router when it connects.
+
+        Args:
+            key (str): device key: the MAC address for network devices (the "Key" field in get()).
+
+        Returns:
+            str: response content
+
+        """
+        data = {"service": f"Devices.Device.{_device_key(key)}", "method": "removeName", "parameters": {"source": "webui"}}
+        return self.post("/ws", data)
+
+    @write
+    def set_type(self, key: str, device_type: str) -> str:
+        """Set a device's type, which picks its icon, like the device settings in the web UI.
+
+        Args:
+            key (str): device key: the MAC address for network devices (the "Key" field in get()).
+            device_type (str): one of the types the web UI offers (DEVICE_TYPES), e.g. "computer", "laptop",
+                "smartphone", "tablette" (a tablet), "tv", "printer", "gameconsole", "camera", "ha-switch" (a smart
+                plug), "bulb", "speaker" or "miscellaneous".
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: if the web UI doesn't offer the type.
+
+        """
+        if device_type not in DEVICE_TYPES:
+            raise ValueError(f"device_type must be one of the web UI's types: {', '.join(DEVICE_TYPES)}. Got {device_type!r}")
+        parameters = {"parameters": {"DeviceType": device_type}}
+        return self.post("/ws", {"service": f"Devices.Device.{_device_key(key)}", "method": "set", "parameters": parameters})
+
+    @write
+    def set_dns_name(self, key: str, name: str) -> str:
+        """Give a device a different name in the router's DNS than the one the web UI shows (see rename()).
+
+        The name works straight away, also with the router's local domain (e.g. "nas.home"), and replaces the
+        displayed name in DNS until remove_dns_name(). The web UI keeps showing the displayed name.
+
+        Args:
+            key (str): device key: the MAC address for network devices (the "Key" field in get()).
+            name (str): 1 to 63 letters, digits and hyphens, not starting or ending with a hyphen, e.g. "nas".
+
+        Returns:
+            str: response content
+
+        """
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", name):
+            raise ValueError(
+                f"The DNS name must be 1 to 63 letters, digits and hyphens, not starting or ending with a hyphen, got {name!r}"
+            )
+        data = {"service": f"Devices.Device.{_device_key(key)}", "method": "setName", "parameters": {"name": name, "source": "dns"}}
+        return self.post("/ws", data)
+
+    @write
+    def remove_dns_name(self, key: str) -> str:
+        """Remove the DNS name given to a device with set_dns_name(), so its displayed name works in DNS again.
+
+        Args:
+            key (str): device key: the MAC address for network devices (the "Key" field in get()).
+
+        Returns:
+            str: response content
+
+        """
+        data = {"service": f"Devices.Device.{_device_key(key)}", "method": "removeName", "parameters": {"source": "dns"}}
+        return self.post("/ws", data)
+
+    @write
+    def reset_traffic_counters(self) -> str:
+        """Set every device's traffic counters to 0, like the reset button on the web UI's bandwidth page.
+
+        The counters are the "Bandwidth" field in get(): what each device received and sent over the last day, week
+        and month. The exporter's device traffic gauges start again from 0. The old counts can't be brought back.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"service": "Devices.Config.bandwidth", "method": "set", "parameters": {"Reset": 1}}
+        return self.post("/ws", data)
+
+    @write
+    def clear_traffic_history(self, mac: str) -> str:
+        """Delete a Wi-Fi device's recent traffic history, like the web UI's reset button for a device's data usage.
+
+        The history is the device's traffic and Wi-Fi signal readings, one every 15 seconds for about the last 25
+        minutes, from which the web UI draws its graphs. It can't be brought back; the next reading starts a new one.
+        The data the device used today, this week and this month (the "Bandwidth" field in get()) stays, and so do
+        its hourly snapshots (getEventLog type "network_persistent"): only reset_traffic_counters() resets those, for
+        every device. Wired devices have no history.
+
+        Args:
+            mac (str): device MAC address.
+
+        Returns:
+            str: response content
+
+        Raises:
+            ValueError: if the router has no traffic history for the device, e.g. because it's wired or never connected.
+
+        """
+        source = f"Devices.Device.{normalize_mac(mac)}"
+        results = []
+        for topic in _TRAFFIC_LOGS:
+            try:
+                results.append(self.post("/sysbus/GenLog:clearLogs", {"parameters": {"topic": topic, "source": source}}))
+            except requests.HTTPError as error:
+                # Like the web UI, also try "network_persistent", although the Internet-Box 4 doesn't keep it here.
+                if "Topic does not exist" not in str(error):
+                    raise
+        if not results:
+            raise ValueError(f"The router has no traffic history for {mac}, e.g. because it's wired or never connected")
+        return results[-1]
 
     @write
     def remove(self, mac: str) -> str:

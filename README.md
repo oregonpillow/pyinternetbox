@@ -18,6 +18,7 @@
   - [Library usage](#library-usage)
 - [📡 Running the Exporter](#-running-the-exporter)
   - [Traffic metrics: which one to use](#traffic-metrics-which-one-to-use)
+  - [DNS query metrics](#dns-query-metrics)
 - [🤖 MCP Server](#-mcp-server)
   - [Setup in OpenCode](#setup-in-opencode)
   - [What the AI may do](#what-the-ai-may-do)
@@ -115,7 +116,7 @@ ibox nmc restore internetbox.cfg
 
 `ibox nmc backup-to-swisscom` uploads the settings to Swisscom, as the web interface does when you save a change. It only works if backup to Swisscom is turned on for your router; the web interface has no setting for it. The upload runs in the background for about a minute, and `ibox nmc network-config` shows its status.
 
-Commands that cut connections ask for confirmation first: `ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), turning Wi-Fi or the guest Wi-Fi off, changing Wi-Fi names, passwords or channels, turning on a Wi-Fi schedule, blocking outgoing traffic in the custom firewall and turning off the WireGuard VPN server. So does `ibox voice clear-call-list`, which can't be undone. Add `--yes` to skip the question in scripts.
+Commands that cut connections ask for confirmation first: `ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), turning Wi-Fi or the guest Wi-Fi off, changing Wi-Fi names, passwords, channels or standards, turning on band steering or a Wi-Fi schedule, changing the DNS servers the router asks, blocking outgoing traffic in the custom firewall and turning off the WireGuard VPN server. So do commands that delete what can't be brought back: `ibox voice clear-call-list`, `ibox firewall delete-all-port-forwarding` and `ibox devices reset-traffic-counters`. Add `--yes` to skip the question in scripts.
 
 ### Library usage
 
@@ -205,6 +206,27 @@ Notes:
 - Counters restart from zero when the Internet Box reboots; Prometheus' `rate()` and `increase()` handle this.
 - The per-device rolling totals are only reported for Wi-Fi devices. The direction of their `rx`/`tx` follows the
   router's naming and has not been independently verified.
+
+### DNS query metrics
+
+The router answers the DNS queries of devices that use it as their DNS server (the default). It answers some itself and
+passes the rest on to its DNS servers (your provider's, or those set with `ibox dns set-upstream-servers`). All of these
+are counters that count since the router last booted.
+
+| Metric                                    | Labels   | What it counts                                                        |
+| ----------------------------------------- | -------- | --------------------------------------------------------------------- |
+| `internetbox_dns_local_answered_total`    |          | Queries the router answered itself, from its cache or its own records |
+| `internetbox_dns_queries_forwarded_total` |          | Queries the router passed on to a DNS server                          |
+| `internetbox_dns_cache_inserted_total`    |          | Answers added to the router's DNS cache                               |
+| `internetbox_dns_cache_live_freed_total`  |          | Answers dropped from the cache before they expired, to make room      |
+| `internetbox_dns_queries_sent_total`      | `server` | Queries sent to that DNS server                                       |
+| `internetbox_dns_queries_failed_total`    | `server` | Queries to that DNS server that failed                                |
+| `internetbox_dns_queries_retried_total`   | `server` | Queries to that DNS server that were retried                          |
+
+- **"Is my DNS server failing?"** → `increase(internetbox_dns_queries_failed_total[1h]) > 0`.
+- The two cache counters stay at 0 while the router's DNS cache is off (see `ibox dns cache`).
+- The router also reports `dns_auth_answered`, `fallback` and `dns_queries_failed_or_retried`. They aren't exported: the
+  first two are unclear (always 0 so far), and the last is just failed + retried.
 
 Dashboards can be found in the Grafana folder.
 
@@ -340,7 +362,7 @@ So far the project is in early stages and I'm the only contributor, but I welcom
 
 ### How to contribute
 
-- Read the [MISSING_ENDPOINTS](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints that might work from the [LiveboxMonitor](https://github.com/p-dor/LiveboxMonitor)
+- Read the [MISSING_ENDPOINTS](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints: what's worth adding next from the web interface, and what might work from [LiveboxMonitor](https://github.com/p-dor/LiveboxMonitor)
 - Check the [API_MAP](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/API_MAP.md) for every endpoint the web interface calls and every function the router exposes, and which ones are implemented. Re-generate it for your model or firmware with `uv run scripts/discover_endpoints.py -H 192.168.1.1 -k`
 - Try creating more complex methods, see below for more details
 - Take a stab at implementing any bugs or features raised in the issues
@@ -480,13 +502,13 @@ uv run pytest tests/test_e2e.py -v
 # 💥 Only destructive tests
 uv run pytest tests/test_e2e.py -m destructive -v
 
-# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on, Wi-Fi channels, Wi-Fi schedule, VPN server on/off)
+# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on, Wi-Fi channels and standards, band steering, the router's DNS servers, Wi-Fi schedule, VPN server on/off)
 IB_E2E_DISRUPTIVE=1 uv run pytest tests/test_e2e.py -m disruptive -v
 ```
 
-Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels, the custom firewall's basic actions, 6 GHz power saving), or create something temporary and delete it again: a disabled port forwarding rule, a disabled custom firewall rule and a DynDNS host that the router doesn't keep up to date, named after `pyinternetbox-e2e`, a WireGuard client named `pyiboxe2e`, a static route to the unused network `172.31.254.0/24`, and a device entry, IP address reservation, access schedule and time limit for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host, another DynDNS host or a Wi-Fi schedule is set, or the guest Wi-Fi is on.
+Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels, the custom firewall's basic actions, ping replies, the DNS cache switch, WLAN-Box sync, 6 GHz power saving), or create something temporary and delete it again: a disabled port forwarding rule, protocol forwarding rule, IPv6 pinhole and custom firewall rule and a DynDNS host that the router doesn't keep up to date, named after `pyinternetbox-e2e`, a WireGuard client named `pyiboxe2e`, a static route to the unused network `172.31.254.0/24`, and a device entry with a type and DNS name, IP address reservation, access schedule, time limit and band steering exception for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host, another DynDNS host or a Wi-Fi schedule is set, or the guest Wi-Fi is on. Saving the log files replaces the ones saved on the router before.
 
-Tests that cut the network for everyone are skipped unless `IB_E2E_DISRUPTIVE=1` is set. The tests that turn Wi-Fi off and on or write the Wi-Fi names or channels back also skip unless the machine running them is connected to the router by cable, since it could lose its connection otherwise. Turning Wi-Fi off and on leaves the guest network off, so the test turns it back on if it was on.
+Tests that cut the network for everyone are skipped unless `IB_E2E_DISRUPTIVE=1` is set. The tests that turn Wi-Fi off and on or write the Wi-Fi names, channels or standards back also skip unless the machine running them is connected to the router by cable, since it could lose its connection otherwise. Turning Wi-Fi off and on leaves the guest network off, so the test turns it back on if it was on.
 
 ## Related Projects
 

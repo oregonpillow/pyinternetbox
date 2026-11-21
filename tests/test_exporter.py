@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 from prometheus_client import CollectorRegistry, generate_latest
 
 from internetbox_client.exporter import InternetBoxCollector
+from internetbox_client.metrics import register_metrics
 
 
 def _metrics_text(collector: InternetBoxCollector) -> str:
@@ -85,3 +87,56 @@ class TestInternetBoxCollector:
         col._run_callbacks()
         col._run_callbacks()
         assert "test_static 7.0" in _metrics_text(col)
+
+
+# Shape of DNS/Server:getMetrics on an Internet Box 4, with a second DNS server added.
+_DNS_METRICS = {
+    "dns_cache_inserted": 0,
+    "dns_cache_live_freed": 0,
+    "dns_queries_forwarded": 1484,
+    "dns_auth_answered": 0,
+    "dns_local_answered": 134574,
+    "fallback": 0,
+    "192.168.0.53": {"dns_queries_sent": 1484, "dns_queries_failed_or_retried": 2, "dns_queries_failed": 0, "dns_queries_retried": 2},
+    "9.9.9.9": {"dns_queries_sent": 10, "dns_queries_failed_or_retried": 1, "dns_queries_failed": 1, "dns_queries_retried": 0},
+}
+
+
+class TestDnsQueryMetrics:
+    @staticmethod
+    def _collect(status: dict) -> str:
+        client = MagicMock()
+        client.devices.get.return_value = json.dumps({"status": []})
+        client.dns.metrics.return_value = json.dumps({"status": status})
+        col = InternetBoxCollector(client=client)
+        register_metrics(col, client)
+        col._callbacks = [cb for cb in col._callbacks if cb.__name__ == "collect_dns_queries"]
+        col._run_callbacks()
+        return _metrics_text(col)
+
+    def test_totals_are_counters(self) -> None:
+        text = self._collect(_DNS_METRICS)
+        assert "# TYPE internetbox_dns_local_answered_total counter" in text
+        assert "internetbox_dns_local_answered_total 134574.0" in text
+        assert "internetbox_dns_queries_forwarded_total 1484.0" in text
+        assert "internetbox_dns_cache_inserted_total 0.0" in text
+        assert "internetbox_dns_cache_live_freed_total 0.0" in text
+
+    def test_per_server_counters(self) -> None:
+        text = self._collect(_DNS_METRICS)
+        assert 'internetbox_dns_queries_sent_total{server="192.168.0.53"} 1484.0' in text
+        assert 'internetbox_dns_queries_retried_total{server="192.168.0.53"} 2.0' in text
+        assert 'internetbox_dns_queries_sent_total{server="9.9.9.9"} 10.0' in text
+        assert 'internetbox_dns_queries_failed_total{server="9.9.9.9"} 1.0' in text
+
+    def test_unclear_and_combined_counts_not_exported(self) -> None:
+        text = self._collect(_DNS_METRICS)
+        assert "auth_answered" not in text
+        assert "fallback" not in text
+        assert "failed_or_retried" not in text
+
+    def test_missing_counts_skipped(self) -> None:
+        text = self._collect({"dns_queries_forwarded": 5})
+        assert "internetbox_dns_queries_forwarded_total 5.0" in text
+        assert "internetbox_dns_local_answered" not in text
+        assert "internetbox_dns_queries_sent" not in text

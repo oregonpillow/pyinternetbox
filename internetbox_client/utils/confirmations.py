@@ -33,6 +33,20 @@ QUESTIONS: dict[tuple[str, str], tuple[str, Callable[[Mapping[str, object]], boo
         "Let the router choose a new Wi-Fi channel now? If it changes, devices on this band lose their connection for a moment.",
         lambda args: True,
     ),
+    ("wifi", "set_steering_enabled"): (
+        "Turn band steering on? The router then moves wireless devices between bands, and they lose their connection for a "
+        "moment when it does.",
+        lambda args: bool(args["enable"]),
+    ),
+    ("wifi", "set_standard"): (
+        "Change the Wi-Fi standard? Devices on this band may lose their connection for a moment.",
+        lambda args: True,
+    ),
+    ("dns", "set_upstream_servers"): (
+        "Change the DNS servers the router asks? If they don't answer, devices on the home network can't look up names, so "
+        "the internet seems down.",
+        lambda args: True,
+    ),
     ("scheduler", "set_wifi_schedule"): (
         "Turn Wi-Fi off on a schedule? During the off periods, every wireless device loses its connection, including this "
         "computer if it's on Wi-Fi.",
@@ -53,6 +67,14 @@ QUESTIONS: dict[tuple[str, str], tuple[str, Callable[[Mapping[str, object]], boo
         lambda args: not args["enable"],
     ),
     ("voice", "clear_call_list"): ("Delete all calls from the call list? They can't be brought back.", lambda args: True),
+    ("firewall", "delete_all_port_forwarding"): (
+        "Delete all port forwarding rules? They can't be brought back. Ports that devices opened themselves with UPnP stay open.",
+        lambda args: True,
+    ),
+    ("devices", "reset_traffic_counters"): (
+        "Set every device's traffic counters for the last day, week and month to 0? The old counts can't be brought back.",
+        lambda args: True,
+    ),
 }
 
 
