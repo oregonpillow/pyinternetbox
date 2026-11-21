@@ -43,6 +43,9 @@ _COMMANDS = [
     ("dns", "set_upstream_servers"),
     ("firewall", "delete_all_port_forwarding"),
     ("devices", "reset_traffic_counters"),
+    ("wireguard", "set_enabled"),
+    ("scheduler", "override_device_schedule"),
+    ("dhcp", "add_static_lease"),
 ]
 
 
@@ -179,6 +182,23 @@ def test_device_steering_options(client: MagicMock, args: list[str], kwargs: dic
     client.wifi.set_device_steering.assert_called_once_with(mac="aa:bb:cc:dd:ee:ff", **kwargs)
 
 
+@pytest.mark.parametrize(
+    "args,kwargs",
+    [
+        (["allow"], {"access": "allow", "until_next_change": False}),
+        (["block", "--until-next-change"], {"access": "block", "until_next_change": True}),
+    ],
+)
+def test_override_device_schedule_options(client: MagicMock, args: list[str], kwargs: dict) -> None:
+    assert runner.invoke(cli.app, ["scheduler", "override-device-schedule", "aa:bb:cc:dd:ee:ff", *args]).exit_code == 0
+    client.scheduler.override_device_schedule.assert_called_once_with(mac="aa:bb:cc:dd:ee:ff", **kwargs)
+
+
+def test_guest_pool_option(client: MagicMock) -> None:
+    assert runner.invoke(cli.app, ["dhcp", "add-static-lease", "aa:bb:cc:dd:ee:ff", "10.128.0.20", "--pool", "guest"]).exit_code == 0
+    client.dhcp.add_static_lease.assert_called_once_with(mac="aa:bb:cc:dd:ee:ff", ip="10.128.0.20", pool="guest")
+
+
 def test_standard_not_offered_shows_message() -> None:
     """The CLI converts the number; the method refuses it before contacting the router."""
     with patch.object(cli, "_make_client", lambda: InternetBoxClient(hostname="192.0.2.1", ssl_verify=False)):
@@ -290,6 +310,7 @@ _CONFIRMED = [
         {"action": "block", "ip_version": 4, "direction": "outbound"},
     ),
     (["wireguard", "set-server-enabled", "false"], "Turn off the WireGuard VPN server?", "wireguard.set_server_enabled", {"enable": False}),
+    (["wireguard", "set-enabled", "false"], "Turn off WireGuard?", "wireguard.set_enabled", {"enable": False}),
     (["wifi", "set-steering-enabled", "true"], "Turn band steering on?", "wifi.set_steering_enabled", {"enable": True}),
     (["wifi", "set-standard", "5GHz", "6"], "Change the Wi-Fi standard?", "wifi.set_standard", {"band": "5GHz", "standard": 6}),
     (
@@ -354,6 +375,7 @@ def test_turning_wifi_on_doesnt_ask(client: MagicMock, args: list[str], method: 
         (["firewall", "set-custom-policy", "allow"], "firewall.set_custom_policy"),
         (["firewall", "set-custom-policy", "block", "--ip-version", "6", "--direction", "inbound"], "firewall.set_custom_policy"),
         (["wireguard", "set-server-enabled", "true"], "wireguard.set_server_enabled"),
+        (["wireguard", "set-enabled", "true"], "wireguard.set_enabled"),
         (["wifi", "set-steering-enabled", "false"], "wifi.set_steering_enabled"),
     ],
 )

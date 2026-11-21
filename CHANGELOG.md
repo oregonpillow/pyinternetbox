@@ -8,11 +8,20 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 
 - **Wi-Fi**: turn band steering on or off (`wifi.set_steering_enabled()`), leave a device out of band steering or keep it on the router or a WLAN-Box (`wifi.set_device_steering()`), choose the newest Wi-Fi standard each band offers, e.g. Wi-Fi 6 instead of 7 (`wifi.set_standard()`), and whether WLAN-Boxes turn their Wi-Fi on and off with the router's (`wifi.set_wlan_box_sync()`).
 - **DNS**: set the DNS servers the router itself asks, e.g. a Pi-hole, or go back to the internet provider's (`dns.set_upstream_servers()`), turn the DNS cache on or off (`dns.set_cache_enabled()`), and count the DNS queries the router answered (`dns.metrics()`).
+- **Fixed IP addresses**: also on the guest Wi-Fi, with `pool="guest"` for `dhcp.static_leases()`, `add_static_lease()` and `delete_static_lease()` (`--pool guest` in the CLI). `dhcp.ipv6_server_status()` tells whether the DHCPv6 server runs.
 - **Devices**: set a device's type, which picks its icon (`devices.set_type()`, with the web interface's types in `DEVICE_TYPES`), give it a different name in the router's DNS than the one the web interface shows (`devices.set_dns_name()`, `remove_dns_name()`), go back to the name it was found with (`devices.reset_name()`), set every device's traffic counters to 0 (`devices.reset_traffic_counters()`) and delete a Wi-Fi device's recent traffic readings, which the web interface draws its graphs from (`devices.clear_traffic_history()`).
-- **Firewall**: whether the router answers pings from the internet (`firewall.respond_to_ping()`, `set_respond_to_ping()`), forwarding whole IP protocols such as GRE to a device (`firewall.protocol_forwarding()`, `set_protocol_forwarding()`, `delete_protocol_forwarding()`), IPv6 pinholes (`firewall.ipv6_pinholes()`, `set_ipv6_pinhole()`, `delete_ipv6_pinhole()`), and deleting all port forwarding rules at once (`firewall.delete_all_port_forwarding()`).
+- **Parental controls**: allow or block a device's internet access now, whatever its schedule says, e.g. for one more evening (`scheduler.override_device_schedule()`). The override lasts until it's set back to `"schedule"`, or with `until_next_change=True` until the schedule next switches the other way.
+- **Firewall**: whether the router answers pings from the internet (`firewall.respond_to_ping()`, `set_respond_to_ping()`), forwarding whole IP protocols such as GRE to a device (`firewall.protocol_forwarding()`, `set_protocol_forwarding()`, `delete_protocol_forwarding()`), IPv6 pinholes (`firewall.ipv6_pinholes()`, `set_ipv6_pinhole()`, `delete_ipv6_pinhole()`), deleting all port forwarding rules at once (`firewall.delete_all_port_forwarding()`), and how the router presents itself to devices over UPnP (`firewall.upnp_description()`).
+- **Remote access**: turn DynDNS on or off for all hosts at once (`dyndns.set_enabled()`), and WireGuard as a whole, which the web interface can't (`wireguard.set_enabled()`). Like the web interface, `wireguard.set_server_enabled(True)` and `add_client()` create the VPN server first on a router that doesn't have one yet.
 - **Troubleshooting**: save a log file for technical support and a Wi-Fi debug snapshot on the router (`debug.save_log_file()`, `debug.save_wifi_logs()`).
 - **Exporter**: DNS query counts since the router last booted: how many queries the router answered itself or passed on, and per DNS server how many it sent, failed or retried (`internetbox_dns_*_total`). See "DNS query metrics" in the README.
-- **CLI**: turning band steering on, changing a Wi-Fi standard or the router's DNS servers, deleting all port forwarding rules and resetting the traffic counters ask for confirmation first, and so does the MCP server.
+- **CLI**: turning band steering on, changing a Wi-Fi standard or the router's DNS servers, deleting all port forwarding rules, resetting the traffic counters and turning WireGuard off ask for confirmation first, and so does the MCP server.
+- **MCP server**: `lan_settings` also lists the guest Wi-Fi's fixed IP addresses, and `parental_controls` shows whether a device's schedule is overridden.
+
+### Changed
+
+- `devices.block()` also ends an override that allows the device's internet access (see `scheduler.override_device_schedule()`). Otherwise the device would stay unblocked.
+- When WireGuard is turned off, `wireguard.set_server_enabled()` and `add_client()` say how to turn it on (`wireguard.set_enabled(True)`).
 
 ## [0.2.0] - 2026-11-20
 

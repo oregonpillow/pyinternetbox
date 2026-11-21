@@ -494,6 +494,26 @@ class TestDevicesParentalControls:
         ]
         assert self._payload(mock_session_manager, "Scheduler:enableSchedule") == {"type": "ToD", "ID": self.MAC, "enable": True}
 
+    @pytest.mark.parametrize(
+        "info,ends_override",
+        [
+            ({"override": "Enable", "value": "Enable"}, True),
+            ({"override": "", "temporaryOverride": True, "value": "Enable"}, True),
+            ({"override": "Disable", "value": "Disable"}, False),  # blocks anyway
+            ({"override": "", "temporaryOverride": True, "value": "Disable"}, False),
+        ],
+    )
+    def test_block_ends_an_override_that_allows_access(self, mock_session_manager: MagicMock, info: dict, ends_override: bool) -> None:
+        """Otherwise the device would stay unblocked: an override lasts while its schedule is turned on."""
+        schedule = json.dumps({"status": True, "data": {"scheduleInfo": {"ID": self.MAC, "enable": True, **info}}})
+        _answering(mock_session_manager, {"/sysbus/Scheduler:getSchedule": schedule}, default='{"status": null}')
+        _make_resource(Devices, mock_session_manager).block(self.MAC)
+        overrides = [
+            c[0][1]["parameters"] for c in mock_session_manager.post.call_args_list if c[0][0] == "/sysbus/Scheduler:overrideSchedule"
+        ]
+        assert overrides == ([{"type": "ToD", "ID": self.MAC, "override": ""}] if ends_override else [])
+        assert "Scheduler:enableSchedule" in self._endpoints(mock_session_manager)
+
     def test_unblock_turns_off_schedule_and_time_limit(self, mock_session_manager: MagicMock) -> None:
         mock_session_manager.post.side_effect = [
             self.SCHEDULE,
@@ -530,12 +550,41 @@ class TestDHCP:
             ("static_leases", "/sysbus/DHCPv4/Server/Pool/default:getStaticLeases"),
             ("server_pool", "/sysbus/DHCPv4/Server:getDHCPServerPool"),
             ("ipv6_prefix_information", "/sysbus/DHCPv6/Server:getPrefixInformation"),
+            ("ipv6_server_status", "/sysbus/DHCPv6/Server:getDHCPv6ServerStatus"),
         ],
     )
     def test_endpoints(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
         svc = _make_resource(DHCP, mock_session_manager)
         getattr(svc, method)()
         assert mock_session_manager.post.call_args[0][0] == endpoint
+
+    def test_guest_pool(self, mock_session_manager: MagicMock) -> None:
+        svc = _make_resource(DHCP, mock_session_manager)
+        svc.static_leases("guest")
+        svc.add_static_lease("aa-bb-cc-dd-ee-ff", "10.128.0.20", pool="guest")
+        svc.delete_static_lease("aa:bb:cc:dd:ee:ff", pool="guest")
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [
+            ("/sysbus/DHCPv4/Server/Pool/guest:getStaticLeases", {"parameters": {}}),
+            (
+                "/sysbus/DHCPv4/Server/Pool/guest:addStaticLease",
+                {"parameters": {"MACAddress": "AA:BB:CC:DD:EE:FF", "IPAddress": "10.128.0.20"}},
+            ),
+            ("/sysbus/DHCPv4/Server/Pool/guest:deleteStaticLease", {"parameters": {"MACAddress": "AA:BB:CC:DD:EE:FF"}}),
+        ]
+
+    @pytest.mark.parametrize(
+        "method,args",
+        [
+            ("static_leases", ()),
+            ("add_static_lease", ("aa:bb:cc:dd:ee:ff", "100.67.0.230")),
+            ("delete_static_lease", ("aa:bb:cc:dd:ee:ff",)),
+        ],
+    )
+    def test_other_pools_refused(self, mock_session_manager: MagicMock, method: str, args: tuple) -> None:
+        """The internetbox4 also has a pool for the 5G box's management network, "fmr5gmgt"."""
+        with pytest.raises(ValueError, match=r"pool must be one of \['default', 'guest'\], got 'fmr5gmgt'"):
+            getattr(_make_resource(DHCP, mock_session_manager), method)(*args, pool="fmr5gmgt")
+        mock_session_manager.post.assert_not_called()
 
     def test_add_static_lease_normalises_mac(self, mock_session_manager: MagicMock) -> None:
         svc = _make_resource(DHCP, mock_session_manager)
@@ -703,6 +752,11 @@ class TestDynDNS:
         svc = _make_resource(DynDNS, mock_session_manager)
         getattr(svc, method)()
         assert mock_session_manager.post.call_args[0][0] == endpoint
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_enabled(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        _make_resource(DynDNS, mock_session_manager).set_enabled(enable)
+        assert mock_session_manager.post.call_args[0][:2] == ("/sysbus/DynDNS:setGlobalEnable", {"parameters": {"enable": enable}})
 
 
 class TestDynDNSHosts:
@@ -882,6 +936,7 @@ class TestFirewall:
             ("custom_rule", "/sysbus/Firewall:getCustomRule"),
             ("delete_dmz", "/sysbus/Firewall:deleteDMZ"),
             ("status", "/sysbus/Firewall:get"),
+            ("upnp_description", "/sysbus/UPnP-IGD:get"),
         ],
     )
     def test_endpoints(self, mock_session_manager: MagicMock, method: str, endpoint: str) -> None:
@@ -1986,6 +2041,49 @@ class TestScheduler:
             svc.set_device_schedule(self.MAC, [{"begin": bad, "end": 604800}])
         mock_session_manager.post.assert_not_called()
 
+    SCHEDULE_ON = json.dumps({"status": True, "data": {"scheduleInfo": {"enable": True, "value": "Disable", "override": ""}}})
+    SCHEDULE_OFF = json.dumps({"status": True, "data": {"scheduleInfo": {"enable": False, "value": "Enable", "override": ""}}})
+
+    @pytest.mark.parametrize(
+        "access,until_next_change,expected",
+        [
+            ("allow", False, ("/sysbus/Scheduler:overrideSchedule", {"override": "Enable"})),
+            ("block", False, ("/sysbus/Scheduler:overrideSchedule", {"override": "Disable"})),
+            ("schedule", False, ("/sysbus/Scheduler:overrideSchedule", {"override": ""})),
+            ("allow", True, ("/sysbus/Scheduler:overrideState", {"state": "Enable"})),
+            ("block", True, ("/sysbus/Scheduler:overrideState", {"state": "Disable"})),
+        ],
+    )
+    def test_override_device_schedule(self, mock_session_manager: MagicMock, access: str, until_next_change: bool, expected: tuple) -> None:
+        """A lasting override sets the schedule's "override"; until_next_change only the current state."""
+        _answering(mock_session_manager, {"/sysbus/Scheduler:getSchedule": self.SCHEDULE_ON})
+        result = _make_resource(Scheduler, mock_session_manager).override_device_schedule("aa-bb-cc-dd-ee-ff", access, until_next_change)
+        endpoint, parameters = expected
+        assert _sent(mock_session_manager, (":getSchedule",)) == [(endpoint, {"parameters": {"type": "ToD", "ID": self.MAC, **parameters}})]
+        assert result == self.SCHEDULE_ON  # the schedule afterwards
+
+    def test_override_ends_while_schedule_is_off(self, mock_session_manager: MagicMock) -> None:
+        _answering(mock_session_manager, {"/sysbus/Scheduler:getSchedule": self.SCHEDULE_OFF})
+        _make_resource(Scheduler, mock_session_manager).override_device_schedule(self.MAC, "schedule")
+        assert [endpoint for endpoint, _ in _sent(mock_session_manager, (":getSchedule",))] == ["/sysbus/Scheduler:overrideSchedule"]
+
+    @pytest.mark.parametrize(
+        "schedule,access,until_next_change,message",
+        [
+            ('{"status": false}', "allow", False, "AA:BB:CC:DD:EE:FF has no internet access schedule"),
+            (SCHEDULE_OFF, "block", False, "The internet access schedule of AA:BB:CC:DD:EE:FF is off"),
+            (SCHEDULE_ON, "schedule", True, 'until_next_change needs access "allow" or "block"'),
+            (SCHEDULE_ON, "Enable", False, r"access must be one of \['allow', 'block', 'schedule'\], got 'Enable'"),
+        ],
+    )
+    def test_override_device_schedule_refuses(
+        self, mock_session_manager: MagicMock, schedule: str, access: str, until_next_change: bool, message: str
+    ) -> None:
+        _answering(mock_session_manager, {"/sysbus/Scheduler:getSchedule": schedule})
+        with pytest.raises(ValueError, match=message):
+            _make_resource(Scheduler, mock_session_manager).override_device_schedule(self.MAC, access, until_next_change)  # type: ignore[arg-type]
+        assert _sent(mock_session_manager, (":getSchedule",)) == []
+
 
 class TestWifiSchedule:
     """The Wi-Fi schedule of the web UI's power settings: type WLAN, ID wl0."""
@@ -2726,15 +2824,30 @@ class TestWireguardClients:
     )
     READS = (":_get", ":getLANIP", ":getWANStatus")
 
-    def _wireguard(self, sm: MagicMock, enabled: bool = True, public_ip: str = "203.0.113.5", **answers: object) -> Wireguard:
+    def _wireguard(
+        self,
+        sm: MagicMock,
+        enabled: bool = True,
+        public_ip: str = "203.0.113.5",
+        server: str | None = "default",
+        created: str | None = "default",
+        **answers: object,
+    ) -> Wireguard:
+        """A router whose WireGuard server is named *server*, or that has none and names a new one *created*."""
         clients = {
             "WireGuard.Server.1.Client.1.": {"Alias": "laptop", "Enable": True, "IntranetAccess": True},
             "WireGuard.Server.1.Client.": {},
         }
+
+        def servers(name: str | None) -> str:
+            found = {"WireGuard.Server.1.": {"Alias": name, "Enable": False}} if name else {}
+            return json.dumps({"status": {**found, "WireGuard.Server.": {}}})
+
         _answering(
             sm,
             {
                 "/sysbus/WireGuard:_get": json.dumps({"status": {"WireGuard.": {"Enable": enabled, "Status": "Enabled"}}}),
+                "/sysbus/WireGuard/Server:_get": servers(server) if server else [servers(None), servers(created)],
                 f"{self.CLIENT}:_get": json.dumps({"status": clients}),
                 "/sysbus/NMC:getLANIP": json.dumps({"status": None, "data": {"Address": "192.168.1.1"}}),
                 "/sysbus/NMC:getWANStatus": json.dumps({"status": True, "data": {"IPAddress": public_ip}}),
@@ -2754,6 +2867,50 @@ class TestWireguardClients:
         self._wireguard(mock_session_manager).set_server_enabled(enable)
         assert _sent(mock_session_manager, self.READS) == [
             ("/sysbus/WireGuard/Server/default:_set", {"parameters": {"parameters": {"Enable": enable}}})
+        ]
+
+    def test_set_server_enabled_creates_the_server(self, mock_session_manager: MagicMock) -> None:
+        """Like the web UI the first time the VPN is turned on, on a router that has no WireGuard server yet."""
+        self._wireguard(mock_session_manager, server=None).set_server_enabled(True)
+        assert _sent(mock_session_manager, self.READS) == [
+            ("/sysbus/WireGuard/Server:_add", {"parameters": {}}),
+            ("/sysbus/WireGuard/Server/default:_set", {"parameters": {"parameters": {"Enable": True}}}),
+        ]
+
+    def test_set_server_disabled_creates_nothing(self, mock_session_manager: MagicMock) -> None:
+        self._wireguard(mock_session_manager, server=None).set_server_enabled(False)
+        assert [endpoint for endpoint, _ in _sent(mock_session_manager, self.READS)] == ["/sysbus/WireGuard/Server/default:_set"]
+
+    @pytest.mark.parametrize(
+        "server,created,message",
+        [
+            ("wg0", "default", r"the router's servers are: 'wg0'\."),
+            (None, "wg0", r"the router's servers are: 'wg0'\."),
+            (None, None, r"the router's servers are: none\."),  # it didn't create one
+        ],
+    )
+    def test_server_not_named_default(self, mock_session_manager: MagicMock, server: str | None, created: str | None, message: str) -> None:
+        """The other methods only reach the server named "default"; the router chooses the name."""
+        svc = self._wireguard(mock_session_manager, server=server, created=created)
+        with pytest.raises(ValueError, match="pyinternetbox uses the WireGuard server named 'default', but " + message):
+            svc.set_server_enabled(True)
+        assert [endpoint for endpoint, _ in _sent(mock_session_manager, self.READS)] == (
+            [] if server else ["/sysbus/WireGuard/Server:_add"]
+        )
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_set_enabled(self, mock_session_manager: MagicMock, enable: bool) -> None:
+        """Also while WireGuard is off: that's when it's needed."""
+        self._wireguard(mock_session_manager, enabled=False).set_enabled(enable)
+        assert [c[0][:2] for c in mock_session_manager.post.call_args_list] == [
+            ("/sysbus/WireGuard:_set", {"parameters": {"parameters": {"Enable": enable}}})
+        ]
+
+    def test_add_client_creates_the_server(self, mock_session_manager: MagicMock) -> None:
+        self._wireguard(mock_session_manager, server=None).add_client("phone")
+        assert [endpoint for endpoint, _ in _sent(mock_session_manager, self.READS)][:2] == [
+            "/sysbus/WireGuard/Server:_add",
+            f"{self.CLIENT}:_add",
         ]
 
     def test_add_client_with_the_public_ip(self, mock_session_manager: MagicMock) -> None:
@@ -2787,7 +2944,7 @@ class TestWireguardClients:
             ({"name": "laptop"}, {}, "There's already a WireGuard client named 'laptop'"),
             ({"endpoint": "my home"}, {}, "endpoint must be an IPv4 address or a host name"),
             ({"endpoint": "-home.ddns.net"}, {}, "endpoint must be"),
-            ({}, {"enabled": False}, "WireGuard isn't available on this router"),
+            ({}, {"enabled": False}, r"WireGuard is turned off on this router .* Turn it on with set_enabled\(True\)"),
             ({}, {"public_ip": "0.0.0.0"}, "The router has no public IPv4 address. Give an endpoint"),
             ({}, {"public_ip": ""}, "no public IPv4 address"),
         ],
@@ -2836,7 +2993,7 @@ class TestWireguardClients:
         assert _sent(mock_session_manager, self.READS) == []
 
     def test_set_server_enabled_without_wireguard(self, mock_session_manager: MagicMock) -> None:
-        with pytest.raises(ValueError, match="WireGuard isn't available"):
+        with pytest.raises(ValueError, match="WireGuard is turned off"):
             self._wireguard(mock_session_manager, enabled=False).set_server_enabled(True)
         assert _sent(mock_session_manager, self.READS) == []
 

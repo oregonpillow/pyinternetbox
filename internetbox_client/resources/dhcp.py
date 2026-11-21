@@ -1,46 +1,68 @@
+from typing import Literal
+
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
 from internetbox_client.utils.labels import write
+
+# The address pools with fixed IP addresses: the home network's and the guest Wi-Fi's.
+_POOLS = ("default", "guest")
+
+
+def _pool(pool: str) -> str:
+    if pool not in _POOLS:
+        raise ValueError(f"pool must be one of {list(_POOLS)}, got {pool!r}")
+    return pool
 
 
 class DHCP(APIClient):
     """DHCPv4 and DHCPv6 server settings and leases."""
 
-    def static_leases(self) -> str:
-        """Get DHCPv4 static leases"""
+    def static_leases(self, pool: Literal["default", "guest"] = "default") -> str:
+        """Get the fixed IP addresses reserved for devices (static DHCP leases).
+
+        Args:
+            pool (str): "default" for the home network, "guest" for the guest Wi-Fi. Default is "default".
+
+        Returns:
+            str: response content
+
+        """
         data = {"parameters": {}}
-        return self.post("/sysbus/DHCPv4/Server/Pool/default:getStaticLeases", data)
+        return self.post(f"/sysbus/DHCPv4/Server/Pool/{_pool(pool)}:getStaticLeases", data)
 
     @write
-    def add_static_lease(self, mac: str, ip: str) -> str:
+    def add_static_lease(self, mac: str, ip: str, pool: Literal["default", "guest"] = "default") -> str:
         """Reserve an IP address for a device (static DHCP lease).
 
         The device gets the address the next time it renews its lease, e.g. when it reconnects.
 
         Args:
             mac (str): device MAC address, e.g. "AA:BB:CC:DD:EE:FF".
-            ip (str): IPv4 address in the LAN subnet, e.g. "192.168.1.20".
+            ip (str): IPv4 address in the pool's network, e.g. "192.168.1.20", or "10.128.0.20" for the guest Wi-Fi
+                (see server_pool()).
+            pool (str): "default" for the home network, "guest" for the guest Wi-Fi. Default is "default".
 
         Returns:
             str: response content
 
         """
         data = {"parameters": {"MACAddress": normalize_mac(mac), "IPAddress": ip}}
-        return self.post("/sysbus/DHCPv4/Server/Pool/default:addStaticLease", data)
+        return self.post(f"/sysbus/DHCPv4/Server/Pool/{_pool(pool)}:addStaticLease", data)
 
     @write
-    def delete_static_lease(self, mac: str) -> str:
+    def delete_static_lease(self, mac: str, pool: Literal["default", "guest"] = "default") -> str:
         """Remove a device's IP address reservation (static DHCP lease).
 
         Args:
             mac (str): device MAC address.
+            pool (str): "default" for the home network, "guest" for the guest Wi-Fi. Default is "default".
 
         Returns:
             str: response content
 
         """
         data = {"parameters": {"MACAddress": normalize_mac(mac)}}
-        return self.post("/sysbus/DHCPv4/Server/Pool/default:deleteStaticLease", data)
+        return self.post(f"/sysbus/DHCPv4/Server/Pool/{_pool(pool)}:deleteStaticLease", data)
 
     def server_pool(self) -> str:
         """Get DHCPv4 server pool"""
@@ -51,6 +73,11 @@ class DHCP(APIClient):
         """Get DHCPv6 prefix information"""
         data = {"parameters": {"pool": "lan"}}
         return self.post("/sysbus/DHCPv6/Server:getPrefixInformation", data)
+
+    def ipv6_server_status(self) -> str:
+        """Get whether the router's DHCPv6 server, which gives devices their IPv6 settings, runs: "Enabled" or "Disabled"."""
+        data = {"parameters": {}}
+        return self.post("/sysbus/DHCPv6/Server:getDHCPv6ServerStatus", data)
 
 
 # curl 'https://internetbox.swisscom.ch/sysbus/DHCPv6/Server:getPrefixInformation' \

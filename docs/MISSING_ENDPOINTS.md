@@ -29,11 +29,11 @@ From [API_MAP.md](API_MAP.md) of 2026-11-21 (IB4-00, firmware 15.21.36): the web
 | --- | --- | --- | --- | --- |
 | ✅ | Wi-Fi band steering | Done: `wifi.set_steering_enabled()`, `set_device_steering()`, `set_standard()` and `set_wlan_box_sync()`. Like the internetbox4's web interface, `set_standard()` turns each standard on or off with `enable` and `disable`; the web interface uses `set` on other models. | `SSW.Steering:set`, `SSW.Steering.ExceptionList:createException`, `deleteException`, `SSW.Steering.MasterConfig.OperatingStandards:enable`, `disable`, `set`, `SSW.Steering.MasterConfig:set` | 🌐 |
 | ✅ | DNS | Done: `dns.set_upstream_servers()`, `set_cache_enabled()` and `metrics()`. `set_upstream_servers()` also sets the DNS mode, like the web interface: `Custom` with servers, `All` (the provider's) without, so there's no separate `setMode` method. The exporter exports the DNS query counts (`internetbox_dns_*_total`). | `DNS.Server:setRoute`, `deleteRoute`, `DNS:setMode`, `DNS.Server:configureCache`, `getMetrics` | 🌐 |
-| ✅ | Counters and logs | Done: `devices.reset_traffic_counters()`, `devices.clear_traffic_history()` (a Wi-Fi device's `network` log, its readings every 15 s; tested live: the `network_persistent` hourly snapshots aren't a GenLog topic on the internetbox4, so neither this nor the web interface's reset button clears them, and the "Bandwidth" totals stay), `debug.save_log_file()` and `debug.save_wifi_logs()`. ⚠️ The log file can't be downloaded: the web interface's "Save log file locally on the client" link (`/debug`) only appears on developer firmware (a version ending in e.g. `1a` or `1d`), and the router answers it with 503 on 15.21.36. Its connection tracking log ("Save log file", `Conntrack:openQuery` and `GenLog:readLogs`) needs the `superadmin` user; `admin` gets "Permission denied". | `Devices.Config.{id}:set` (`Reset`, id `bandwidth`), `GenLog:clearLogs`, `NMC.Debug.DebugFile:set`, `NMC.Debug:generateWiFiLogs` | 🌐 |
+| ✅ | Counters and logs | Done: `devices.reset_traffic_counters()`, `devices.clear_traffic_history()` (a Wi-Fi device's `network` log, its readings every 15 s; tested live: the `network_persistent` hourly snapshots aren't a GenLog topic on the internetbox4, so neither this nor the web interface's reset button clears them, and the "Bandwidth" totals stay), `debug.save_log_file()` and `debug.save_wifi_logs()`. ⚠️ The log file can't be downloaded: the web interface's "Save log file locally on the client" link (`/debug`) only appears on developer firmware (a version ending in e.g. `1a` or `1d`), and the router answers it with 503 on 15.21.36. Deleting the log file isn't possible either: the router refuses `NMC.Debug.DebugFile:set` with `DeleteFile` for `admin` ("Permission denied (DeleteFile)"), and the web interface has no button for it. Its connection tracking log ("Save log file", `Conntrack:openQuery` and `GenLog:readLogs`) needs the `superadmin` user; `admin` gets "Permission denied". | `Devices.Config.{id}:set` (`Reset`, id `bandwidth`), `GenLog:clearLogs`, `NMC.Debug.DebugFile:set`, `NMC.Debug:generateWiFiLogs` | 🌐 |
 | ✅ | Firewall extras | Done: `firewall.respond_to_ping()`, `set_respond_to_ping()`, `protocol_forwarding()`, `set_protocol_forwarding()`, `delete_protocol_forwarding()`, `ipv6_pinholes()`, `set_ipv6_pinhole()`, `delete_ipv6_pinhole()` and `delete_all_port_forwarding()`. | `Firewall:getRespondToPing`, `setRespondToPing`, `getProtocolForwarding`, `setProtocolForwarding`, `deleteProtocolForwarding`, `getPinhole`, `setPinhole`, `deletePinhole`, `deletePortForwarding` (all) | |
 | ✅ | Devices | Done: `devices.set_type()`, `set_dns_name()`, `remove_dns_name()` and `reset_name()`. `set_type()` sets `DeviceType` with `Devices.Device.{id}:set`, like the web interface, instead of `setType`. Tested live: a DNS name works straight away, also as `<name>.home`, and replaces the displayed name in the router's DNS until it's removed. | `Devices.Device.{id}:setType`, `setName` (source `dns`), `removeName` | |
-| ⬜ | WireGuard | WireGuard as a whole on or off, and creating the WireGuard server. `wireguard.py` already turns the server on or off and manages its clients. | `WireGuard:_set`, `WireGuard.Server:_add` | 🌐 |
-| ⬜ | Small extras | DynDNS on or off for all hosts, the DHCPv6 server's status, the guest network's fixed IP addresses (the internetbox4 has a `guest` pool), overriding a device's schedule for now, and the router's UPnP description. | `DynDNS:setGlobalEnable`, `DHCPv6.Server:getDHCPv6ServerStatus`, `DHCPv4.Server.Pool.{id}:getStaticLeases` (id `guest`), `Scheduler:overrideSchedule`, `UPnP-IGD:get` | |
+| ✅ | WireGuard | Done: `wireguard.set_enabled()`, and `set_server_enabled(True)` and `add_client()` create the server first on a router without one. Tested live: while WireGuard is off, its `Status` is `Disabled`, the server and clients stay, and turning it on brings them back unchanged. The web interface defines `WireGuard:_set` but never calls it. Like the web interface, `WireGuard.Server:_add` is sent without parameters: the router names the server itself and allows only one. It refused a second server with "duplicate keys", with or without an `Alias`, port or subnet, so creating one couldn't be tested on a router that has one. | `WireGuard:_set`, `WireGuard.Server:_add` | 🌐 |
+| ✅ | Small extras | Done: `dyndns.set_enabled()`, `dhcp.ipv6_server_status()`, `pool="guest"` for `dhcp.static_leases()`, `add_static_lease()` and `delete_static_lease()`, `scheduler.override_device_schedule()` and `firewall.upnp_description()`. Tested live: while DynDNS is off, each host's `status` is `BLOCKED`, and turning it on updates them again within seconds. The guest pool (`10.128.0.0/16`) refuses addresses outside its network and the router's own, and a reservation creates a device entry, like on the home network. `overrideSchedule` lasts until it's set back to `""`, also through turning the schedule off and on; `addSchedule` ends it. `overrideState` (`until_next_change=True`) sets `temporaryOverride` and lasts until the schedule next switches the other way. Neither works without a schedule ("Invalid function parameter (ID)"), and an override has no effect while the schedule is off. | `DynDNS:setGlobalEnable`, `DHCPv6.Server:getDHCPv6ServerStatus`, `DHCPv4.Server.Pool.{id}:getStaticLeases` (id `guest`), `Scheduler:overrideSchedule`, `overrideState`, `UPnP-IGD:get` | |
 | ⬜ | Wi-Fi extenders | Unpair a WLAN-Box, set its LED brightness, its backhaul and roaming settings, and read its interfaces or call its own functions (the web interface reads its station stats and temperature that way). Needs a WLAN-Box to test. | `Devices.Device.{id}.SSW:unpair`, `Devices.Device.{id}.SSW.LED.Status:set`, `SSW.Steering.Device.{id}.APRoaming.Config:get`, `set`, `SSW.Steering.Device.{id}.APRoaming:get`, `Devices.Device.{id}.LDevice:get`, `Devices.Device.{id}.SSW:execAPI` | 🌐 |
 | ⬜ | Telephony (library only) | DECT on or off, eco mode, PIN, pairing, reset, removing all handsets, the DECT signal strength, ringing or unpairing a handset, unpairing a DECT repeater, naming DECT ULE devices, handset settings, ring groups, marking calls as seen, ringing a line, detecting phones on the analog ports, the SIP settings, phonebook backup and CardDAV sync. | `NMC:set` (`GlobalEnableDect`), `DECT:setBaseState`, `setNEMoState`, `setPIN`, `startPairing`, `stopPairing`, `reset`, `removeAllHandsets`, `getRSSI`, `Devices.Device.{id}:ring`, `deRegister`, `unPair`, `setName`, `VoiceService.VoiceApplication:setHandset`, `deleteHandset`, `setGroups`, `setViewedCallList`, `ring`, `startFXSDetection`, `VoiceService.VoiceApplication.VoiceProfile.SIP-Extensions.SIP:get`, `NMC.PhonebookBackup:set`, `CardDav:syncContacts` | 🌐 |
 
@@ -92,7 +92,7 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 
 ---
 
-### `LmDeviceApi` → `devices.py` / `scheduler.py` — Schedule override missing
+### `LmDeviceApi` → `devices.py` / `scheduler.py` — Complete
 
 - [x] `set_name(key, name)` → `Devices.Device.{key}:setName` (source=`webui`)
 - [x] `del_name(key)` → `Devices.Device.{key}:removeName` (source=`webui`)
@@ -101,7 +101,7 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 - [x] `set_type(key, type)` → `Devices.Device.{key}:setType`
 - [x] `get_ip_addr(key)` → `Devices.Device.{key}:getFirstParameter` (parameter=`IPAddress`)
 - [x] `get_schedule(key)` → `Scheduler:getSchedule` (type=`ToD`)
-- [ ] `override_schedule(key, value)` → `Scheduler:overrideSchedule`
+- [x] `override_schedule(key, value)` → `Scheduler:overrideSchedule`
 - [x] `add_schedule(key, schedule)` → `Scheduler:addSchedule` (type=`ToD`)
 - [x] `block(key)` → Composite: `getSchedule` + `overrideSchedule` / `addSchedule`
 - [x] `unblock(key)` → `Scheduler:overrideSchedule` (override=`Enable`)
@@ -115,21 +115,21 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 >
 > `del_name()` is `devices.py:reset_name()`, and `set_dns_name()` and `del_dns_name()` are `devices.py:set_dns_name()` and `remove_dns_name()`. `set_type()` is `devices.py:set_type()`, which sets `DeviceType` through `Devices.Device.{key}:set` like the web UI, and only accepts the types the web UI offers (`devices.DEVICE_TYPES`).
 >
-> `get_schedule()` and `add_schedule()` are `scheduler.py:device_schedule()` and `set_device_schedule()`. `block()` and `unblock()` are `devices.py:block()` and `unblock()`. Like the web UI's "Internet access blocked" switch, they turn the device's schedule on or off with `Scheduler:enableSchedule` instead of `overrideSchedule`, and turn its daily time limit on or off too. `is_blocked()` is covered by `scheduler.py:device_schedule()`: its `value` is `Disable` while the device is blocked.
+> `get_schedule()` and `add_schedule()` are `scheduler.py:device_schedule()` and `set_device_schedule()`. `override_schedule()` is `scheduler.py:override_device_schedule()`, with `"allow"`, `"block"` or `"schedule"` for the router's `Enable`, `Disable` or `""`; with `until_next_change=True` it uses `Scheduler:overrideState` instead, which lasts until the schedule next switches the other way. `block()` and `unblock()` are `devices.py:block()` and `unblock()`. Like the web UI's "Internet access blocked" switch, they turn the device's schedule on or off with `Scheduler:enableSchedule` instead of `overrideSchedule`, and turn its daily time limit on or off too. `block()` also ends an override that allows access. `is_blocked()` is covered by `scheduler.py:device_schedule()`: its `value` is `Disable` while the device is blocked.
 
 ---
 
-### `LmDhcpApi` → `dhcp.py` — Guest pool, DHCPv6 server status and MIBs missing
+### `LmDhcpApi` → `dhcp.py` — MIBs missing
 
-- [ ] `get_leases(guest=True)` → `DHCPv4.Server.Pool.guest:getStaticLeases`
+- [x] `get_leases(guest=True)` → `DHCPv4.Server.Pool.guest:getStaticLeases`
 - [x] `add_lease(mac, ip, guest)` → `DHCPv4.Server.Pool.{domain}:addStaticLease`
 - [x] `delete_lease(mac, guest)` → `DHCPv4.Server.Pool.{domain}:deleteStaticLease`
 - [ ] 🚫 `set_setup(setup)` → `NetMaster.LAN.default.Bridge.lan:setIPv4`
-- [ ] `get_v6_server_status()` → `DHCPv6.Server:getDHCPv6ServerStatus`
+- [x] `get_v6_server_status()` → `DHCPv6.Server:getDHCPv6ServerStatus`
 - [ ] ⚠️ **not on the internetbox4** `get_v6_prefix_leases()` → `DHCPv6.Server:getPDPrefixLeases`
 - [ ] `get_mibs(dhcp_v4, dhcp_v6)` → `NeMo.Intf.data:getMIBs` (mibs=`dhcp`/`dhcpv6`)
 
-> `add_lease()` and `delete_lease()` are `dhcp.py:add_static_lease()` and `delete_static_lease()`, for the home network's pool (`default`) only, not the guest pool. The internetbox4 has a `guest` pool too, so `get_leases(guest=True)` can be added.
+> `get_leases()`, `add_lease()` and `delete_lease()` are `dhcp.py:static_leases()`, `add_static_lease()` and `delete_static_lease()`, with `pool="default"` (the home network) or `pool="guest"` (the guest Wi-Fi) instead of `guest`. The internetbox4's third pool, `fmr5gmgt`, seems to be for the 5G box's management network, so the methods refuse it. `get_v6_server_status()` is `dhcp.py:ipv6_server_status()`.
 >
 > ⚠️ The internetbox4's `DHCPv6.Server` has no `getPDPrefixLeases`.
 >
@@ -137,13 +137,13 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 
 ---
 
-### `LmDynDnsApi` → `dyndns.py` — Global enable missing
+### `LmDynDnsApi` → `dyndns.py` — Complete
 
-- [ ] `set_enable(enable)` → `DynDNS:setGlobalEnable`
+- [x] `set_enable(enable)` → `DynDNS:setGlobalEnable`
 - [x] `add_host(service, user, host, pw)` → `DynDNS:addHost`
 - [x] `delete_host(hostname)` → `DynDNS:delHost`
 
-> `add_host()` is `dyndns.py:set_host()`. It replaces the host of the same service or host name, and keeps the others. The web UI deletes every host except Swisscom's when it saves one. Neither changes Swisscom's own host.
+> `set_enable()` is `dyndns.py:set_enabled()`. `add_host()` is `dyndns.py:set_host()`. It replaces the host of the same service or host name, and keeps the others. The web UI deletes every host except Swisscom's when it saves one. Neither changes Swisscom's own host.
 
 ---
 
@@ -201,10 +201,10 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 
 ---
 
-### `LmLiveboxInfoApi` → `devices.py` / `nmc.py` / `sysbus.py` — Model info, VLAN and MTU missing
+### `LmLiveboxInfoApi` → `devices.py` / `nmc.py` / `sysbus.py` / `firewall.py` — Device config, VLAN and MTU missing
 
 - [ ] `get_device_config()` → `Devices.Device.{mac}:get`
-- [ ] `get_model_info()` → `UPnP-IGD:get`
+- [x] `get_model_info()` → `UPnP-IGD:get`
 - [ ] `get_vlan_id()` → `NeMo.Intf.data:getFirstParameter` (name=`VLANID`)
 - [ ] `get_mtu()` → `NeMo.Intf.data:getFirstParameter` (name=`MTU`)
 - [ ] ⚠️ **not on the internetbox4** `get_uplink_info()` → `UplinkMonitor.DefaultGateway:get`
@@ -213,7 +213,7 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 - [ ] ⚠️ **not on the internetbox4** `get_cgnat_status()` → `NMC.ServiceEligibility.DSLITE:get`
 - [ ] ⚠️ **not on the internetbox4** `set_cgnat_enable(enable)` → `NMC.ServiceEligibility.DSLITE:set`
 
-> `get_device_info()`, `get_memory_status()`, `get_time()`, `get_wan_status()`, `get_connection_status()` are all covered.
+> `get_device_info()`, `get_memory_status()`, `get_time()`, `get_wan_status()`, `get_connection_status()` are all covered. `get_model_info()` is `firewall.py:upnp_description()`, next to the UPnP port forwarding switch.
 >
 > ⚠️ The internetbox4 has no `UplinkMonitor`, `NMC.IPv6`, `NMC.Autodetect` or `NMC.ServiceEligibility.DSLITE` objects.
 
@@ -348,6 +348,8 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 
 ### WireGuard → `wireguard.py` — not in LiveboxMonitor
 
+- [x] Turn WireGuard as a whole on or off → `WireGuard:_set` (`wireguard.py:set_enabled()`)
+- [x] Create the VPN server if the router has none → `WireGuard.Server:_add` (`set_server_enabled(True)` and `add_client()`)
 - [x] Turn the VPN server on or off → `WireGuard.Server.default:_set` (`wireguard.py:set_server_enabled()`)
 - [x] Add a client and get its configuration → `WireGuard.Server.default.Client:_add`, `WireGuard.Server.default.Client.{name}:_set` and `:GeneratePrivateKeyAndGetQRConfig` (`wireguard.py:add_client()`)
 - [x] Change a client → `WireGuard.Server.default.Client.{name}:_set` (`wireguard.py:set_client()`)
@@ -362,13 +364,13 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 | Legacy Module | Status |
 |---|---|
 | `LmBackupRestoreApi` | Complete for the internetbox4 — the other two methods don't exist on it |
-| `LmDeviceApi` | Partial — schedule override missing |
-| `LmDhcpApi` | Partial — guest pool, DHCPv6 server status and MIBs missing; LAN setup left out on purpose; prefix leases aren't on the internetbox4 |
-| `LmDynDnsApi` | Partial — global enable missing |
+| `LmDeviceApi` | Complete |
+| `LmDhcpApi` | Partial — MIBs missing; LAN setup left out on purpose; prefix leases aren't on the internetbox4 |
+| `LmDynDnsApi` | Complete |
 | `LmFirewallApi` | Complete |
 | `LmIntfApi` | Partial — ethernet/ONT/key-list MIBs missing; SFP and HomeLan aren't on the internetbox4 |
 | `LmIptvApi` | Not on the internetbox4 |
-| `LmLiveboxInfoApi` | Partial — device config, model info, VLAN and MTU missing; IPv6, CGNAT and uplink aren't on the internetbox4 |
+| `LmLiveboxInfoApi` | Partial — device config, VLAN and MTU missing; IPv6, CGNAT and uplink aren't on the internetbox4 |
 | `LmRebootApi` | Partial — reboot info missing; history isn't on the internetbox4; factory reset left out on purpose |
 | `LmRoutingApi` | Partial — turning a route on or off missing (not in the web UI either) |
 | `LmScreenApi` | Not on the internetbox4 |

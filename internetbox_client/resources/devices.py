@@ -7,7 +7,7 @@ import requests
 
 from internetbox_client.resources.dhcp import DHCP
 from internetbox_client.resources.mst import MST, _mst_id
-from internetbox_client.resources.scheduler import WEEK, Scheduler
+from internetbox_client.resources.scheduler import WEEK, Scheduler, _schedule_info
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
 from internetbox_client.utils.labels import write
@@ -330,8 +330,9 @@ class Devices(APIClient):
         """Block a device's internet access, like the web UI's "Internet access blocked" switch.
 
         This turns the device's parental controls on. A device without an access schedule gets one that blocks it all
-        week. A device with a schedule (see scheduler.set_device_schedule) is only blocked when that schedule says so.
-        Its daily time limit (see mst.set) is turned on too.
+        week. A device with a schedule (see scheduler.set_device_schedule) is only blocked when that schedule says so,
+        and an override that allows access now (see scheduler.override_device_schedule) ends. Its daily time limit (see
+        mst.set) is turned on too.
 
         Args:
             mac (str): device MAC address.
@@ -360,7 +361,12 @@ class Devices(APIClient):
     def _set_parental_controls(self, mac: str, enable: bool) -> str:
         mac = normalize_mac(mac)
         scheduler, mst = Scheduler(self._sm), MST(self._sm)
-        if json.loads(scheduler.device_schedule(mac)).get("status"):
+        schedule = json.loads(scheduler.device_schedule(mac))
+        if schedule.get("status"):
+            info = _schedule_info(schedule)
+            # An override that allows access (see scheduler.override_device_schedule) would keep the device unblocked.
+            if enable and (info.get("override") == "Enable" or (info.get("temporaryOverride") and info.get("value") == "Enable")):
+                scheduler._override(mac, "schedule")
             scheduler.enable_device_schedule(mac, enable)
         elif enable:
             scheduler.set_device_schedule(mac, [{"begin": 0, "end": WEEK}])

@@ -116,7 +116,7 @@ ibox nmc restore internetbox.cfg
 
 `ibox nmc backup-to-swisscom` uploads the settings to Swisscom, as the web interface does when you save a change. It only works if backup to Swisscom is turned on for your router; the web interface has no setting for it. The upload runs in the background for about a minute, and `ibox nmc network-config` shows its status.
 
-Commands that cut connections ask for confirmation first: `ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), turning Wi-Fi or the guest Wi-Fi off, changing Wi-Fi names, passwords, channels or standards, turning on band steering or a Wi-Fi schedule, changing the DNS servers the router asks, blocking outgoing traffic in the custom firewall and turning off the WireGuard VPN server. So do commands that delete what can't be brought back: `ibox voice clear-call-list`, `ibox firewall delete-all-port-forwarding` and `ibox devices reset-traffic-counters`. Add `--yes` to skip the question in scripts.
+Commands that cut connections ask for confirmation first: `ibox nmc reboot`, `ibox nmc restore` (the router restarts afterwards), turning Wi-Fi or the guest Wi-Fi off, changing Wi-Fi names, passwords, channels or standards, turning on band steering or a Wi-Fi schedule, changing the DNS servers the router asks, blocking outgoing traffic in the custom firewall and turning off WireGuard or the WireGuard VPN server. So do commands that delete what can't be brought back: `ibox voice clear-call-list`, `ibox firewall delete-all-port-forwarding` and `ibox devices reset-traffic-counters`. Add `--yes` to skip the question in scripts.
 
 ### Library usage
 
@@ -436,7 +436,7 @@ This project uses pre-commit hooks. To set it up:
 The version is defined **only by the git tag** — there is no version number to edit in any file.
 [hatch-vcs](https://github.com/ofek/hatch-vcs) derives it at build time, and it flows into the PyPI package, `ibox --version`, the Docker image tags and the exporter's startup line.
 
-First write the release notes: a section for the new version at the top of [`CHANGELOG.md`](https://github.com/oregonpillow/pyinternetbox/blob/master/CHANGELOG.md). In [OpenCode](https://opencode.ai/), `/release-notes v0.2.0` drafts it from the changes since the last release. Read and correct the draft, then commit it. `uv run scripts/release_notes.py v0.2.0` shows the notes as the release will have them.
+First write the release notes: a section for the new version at the top of [`CHANGELOG.md`](https://github.com/oregonpillow/pyinternetbox/blob/master/CHANGELOG.md). Note changes under `## [Unreleased]` as you make them, if you like. In [OpenCode](https://opencode.ai/), `/release-notes v0.2.0` turns that section into the version's: it checks it against the changes since the last release, completes it (or writes it from the changes, if nothing was noted), and starts a new, empty `[Unreleased]`. Read and correct the draft, then commit it. `uv run scripts/release_notes.py v0.2.0` shows the notes as the release will have them.
 
 Then tag the commit that has the notes:
 
@@ -502,11 +502,11 @@ uv run pytest tests/test_e2e.py -v
 # 💥 Only destructive tests
 uv run pytest tests/test_e2e.py -m destructive -v
 
-# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on, Wi-Fi channels and standards, band steering, the router's DNS servers, Wi-Fi schedule, VPN server on/off)
+# 📴 Also tests that briefly cut the network for everyone (guest Wi-Fi on/off, all Wi-Fi off/on, Wi-Fi channels and standards, band steering, the router's DNS servers, Wi-Fi schedule, VPN server on/off, WireGuard off/on)
 IB_E2E_DISRUPTIVE=1 uv run pytest tests/test_e2e.py -m disruptive -v
 ```
 
-Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels, the custom firewall's basic actions, ping replies, the DNS cache switch, WLAN-Box sync, 6 GHz power saving), or create something temporary and delete it again: a disabled port forwarding rule, protocol forwarding rule, IPv6 pinhole and custom firewall rule and a DynDNS host that the router doesn't keep up to date, named after `pyinternetbox-e2e`, a WireGuard client named `pyiboxe2e`, a static route to the unused network `172.31.254.0/24`, and a device entry with a type and DNS name, IP address reservation, access schedule, time limit and band steering exception for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host, another DynDNS host or a Wi-Fi schedule is set, or the guest Wi-Fi is on. Saving the log files replaces the ones saved on the router before.
+Destructive tests leave the router as they found it. They write the current value back (LED brightness, Wi-Fi TX power, firewall levels, the custom firewall's basic actions, ping replies, the DNS cache switch, WLAN-Box sync, 6 GHz power saving, the DynDNS and WireGuard switches), or create something temporary and delete it again: a disabled port forwarding rule, protocol forwarding rule, IPv6 pinhole and custom firewall rule and a DynDNS host that the router doesn't keep up to date, named after `pyinternetbox-e2e`, a WireGuard client named `pyiboxe2e`, a static route to the unused network `172.31.254.0/24`, and a device entry with a type and DNS name, IP address reservations on the home and guest networks, an access schedule and its overrides, time limit and band steering exception for the made-up MAC address `02:00:00:00:00:01`. They skip instead of touching existing settings, e.g. when a DMZ host, another DynDNS host or a Wi-Fi schedule is set, or the guest Wi-Fi is on. Saving the log files replaces the ones saved on the router before.
 
 Tests that cut the network for everyone are skipped unless `IB_E2E_DISRUPTIVE=1` is set. The tests that turn Wi-Fi off and on or write the Wi-Fi names, channels or standards back also skip unless the machine running them is connected to the router by cable, since it could lose its connection otherwise. Turning Wi-Fi off and on leaves the guest network off, so the test turns it back on if it was on.
 

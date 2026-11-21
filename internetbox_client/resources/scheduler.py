@@ -1,5 +1,6 @@
 import json
 import re
+from typing import Literal
 
 from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
@@ -9,6 +10,13 @@ WEEK = 7 * 86400  # schedule times are seconds since Monday 00:00
 _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 # The Wi-Fi schedule in the web UI's power settings: one schedule, with the ID "wl0", for all Wi-Fi networks.
 _WIFI = {"type": "WLAN", "ID": "wl0"}
+# override_device_schedule()'s choices, and the router's override for each.
+_OVERRIDES = {"allow": "Enable", "block": "Disable", "schedule": ""}
+
+
+def _schedule_info(schedule: dict) -> dict:
+    """The "scheduleInfo" of a getSchedule response, or {} without a schedule."""
+    return (schedule.get("data") or {}).get("scheduleInfo") or {}
 
 
 def _week_seconds(value: int | str) -> int:
@@ -58,8 +66,9 @@ class Scheduler(APIClient):
     def device_schedule(self, mac: str) -> str:
         """Get a device's internet access schedule (parental controls).
 
-        In the response, "value" is the current state: "Disable" while internet access is blocked. A device without a
-        schedule returns {"status": false}.
+        In the response, "value" is the current state: "Disable" while internet access is blocked. "override" is a
+        lasting override and "temporaryOverride" whether one lasts until the schedule next changes (see
+        override_device_schedule()). A device without a schedule returns {"status": false}.
 
         Args:
             mac (str): device MAC address.
@@ -114,6 +123,46 @@ class Scheduler(APIClient):
         """
         data = {"parameters": {"type": "ToD", "ID": normalize_mac(mac), "enable": enable}}
         return self.post("/sysbus/Scheduler:enableSchedule", data)
+
+    @write
+    def override_device_schedule(self, mac: str, access: Literal["allow", "block", "schedule"], until_next_change: bool = False) -> str:
+        """Allow or block a device's internet access now, whatever its schedule says, e.g. for one more evening.
+
+        A lasting override stays until it's set back to "schedule", also when the schedule is turned off and on.
+        set_device_schedule() ends it, and so does devices.block() if it allows access. The web UI doesn't show
+        overrides.
+
+        Args:
+            mac (str): device MAC address. The device needs a schedule that's on (see set_device_schedule()).
+            access (str): "allow" or "block" internet access, or "schedule" to follow the schedule again.
+            until_next_change (bool): True to override only until the schedule next switches the other way, e.g.
+                "allow" until the schedule next blocks the device. Default is False: until set back to "schedule".
+
+        Returns:
+            str: the device's schedule, as from device_schedule(). "value" is "Disable" while it is blocked.
+
+        Raises:
+            ValueError: if the device has no schedule, or it's off, or until_next_change is given with "schedule".
+
+        """
+        if access not in _OVERRIDES:
+            raise ValueError(f"access must be one of {list(_OVERRIDES)}, got {access!r}")
+        if until_next_change and access == "schedule":
+            raise ValueError('until_next_change needs access "allow" or "block".')
+        mac = normalize_mac(mac)
+        schedule = json.loads(self.device_schedule(mac))
+        if not schedule.get("status"):
+            raise ValueError(f"{mac} has no internet access schedule. Create one with set_device_schedule().")
+        if access != "schedule" and not _schedule_info(schedule).get("enable"):
+            raise ValueError(f"The internet access schedule of {mac} is off, so overriding it does nothing. Turn it on first.")
+        self._override(mac, access, until_next_change)
+        return self.device_schedule(mac)
+
+    def _override(self, mac: str, access: str, until_next_change: bool = False) -> None:
+        if until_next_change:
+            self.post("/sysbus/Scheduler:overrideState", {"parameters": {"type": "ToD", "ID": mac, "state": _OVERRIDES[access]}})
+        else:
+            self.post("/sysbus/Scheduler:overrideSchedule", {"parameters": {"type": "ToD", "ID": mac, "override": _OVERRIDES[access]}})
 
     @write
     def remove_device_schedule(self, mac: str) -> str:

@@ -1,8 +1,10 @@
 ---
-description: Draft the CHANGELOG.md section for the next release, e.g. /release-notes v0.3.0
+description: Turn CHANGELOG.md's Unreleased section into the next release's notes, e.g. /release-notes v0.3.0
 ---
 
-Draft the release notes for pyinternetbox $ARGUMENTS: a new section at the top of CHANGELOG.md. The release workflow publishes that section as the GitHub Release's notes, so they're the first thing users read about the release.
+Prepare the release notes for pyinternetbox $ARGUMENTS in CHANGELOG.md. The release workflow publishes the version's section as the GitHub Release's notes, so they're the first thing users read about the release.
+
+Changes are noted under `## [Unreleased]` at the top of CHANGELOG.md while they're made. That section becomes the release's: check it against the changes, complete it and give it the version.
 
 ## The changes
 
@@ -30,7 +32,13 @@ The version is $ARGUMENTS. If it's empty, propose one following the README's rul
 
 ## The section
 
-Write it below the introduction of CHANGELOG.md, above the previous release, like the sections already there:
+Start from the `## [Unreleased]` section. If it's empty or missing, because changes weren't noted as they were made, write the section from the changes alone: the steps below are the same.
+
+- Check every line against the changes: correct what's wrong, remove what was undone or isn't in the release, and add what's missing. Merge lines that describe the same area.
+- The section goes below the introduction, above the previous release. Head it `## [X.Y.Z] - YYYY-MM-DD`, with today's date, and put a new, empty `## [Unreleased]` above it.
+- At the end of the file, make the `[Unreleased]` link compare from the new version, and add the version's link below it: `[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/vX.Y.Z...HEAD` and `[X.Y.Z]: https://github.com/oregonpillow/pyinternetbox/compare/v<last release>...vX.Y.Z`.
+
+The version's section looks like the previous releases':
 
 ```md
 ## [X.Y.Z] - YYYY-MM-DD
@@ -52,8 +60,7 @@ One to three sentences: what the release is about, for someone deciding whether 
 ### Security
 ```
 
-- Use today's date. Leave out empty headings, and "Upgrade notes" when nothing breaks.
-- Add a link reference at the end of the file, above the others: `[X.Y.Z]: https://github.com/oregonpillow/pyinternetbox/compare/v<last release>...vX.Y.Z`.
+- Leave out empty headings, and "Upgrade notes" when nothing breaks.
 - Write for the library's, CLI's, exporter's and Docker image's users: what they can do now, not how it's implemented. Group related changes, e.g. "Wi-Fi: turn Wi-Fi on or off, change network names and passwords", instead of listing every method. Name commands and methods in backticks, e.g. `ibox wifi set-channel` or `wifi.set_channel()`.
 - Every line must be backed by the changes. Don't guess what a change is for: read the code, its docstrings and tests, or ask.
 - Short, plain sentences. Bold a leading label only where a list mixes areas, e.g. **CLI**: or **Exporter**:.
@@ -61,5 +68,5 @@ One to three sentences: what the release is about, for someone deciding whether 
 ## Then
 
 1. Run `uv run scripts/release_notes.py $ARGUMENTS` to show the notes as the release will have them, and `npx --yes prettier --write CHANGELOG.md`.
-2. Show the draft, and list anything you weren't sure about.
+2. Show the draft, and list what you changed in the Unreleased section and anything you weren't sure about.
 3. Don't commit, tag or push: the user reviews the notes first.

@@ -38,11 +38,29 @@ class Wireguard(APIClient):
         return self.post(f"/sysbus/WireGuard/Server/default/Client/{alias}/InfoStats:_get", data)
 
     @disruptive
+    def set_enabled(self, enable: bool) -> str:
+        """Turn WireGuard on or off as a whole, with its server and clients. The web UI has no switch for it.
+
+        While it's off, the web UI doesn't offer WireGuard, and set_server_enabled() and add_client() refuse. Turning it
+        off disconnects the VPN clients.
+
+        Args:
+            enable (bool): True to turn WireGuard on, False to turn it off.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"parameters": {"Enable": enable}}}
+        return self.post("/sysbus/WireGuard:_set", data)
+
+    @disruptive
     def set_server_enabled(self, enable: bool) -> str:
         """Turn the WireGuard VPN server on or off, like the WireGuard switch in the web UI's VPN settings.
 
         While it's on, the router accepts WireGuard connections from the internet on port 51820 (ListenPort in
-        server_status()). Turning it off disconnects the VPN clients.
+        server_status()). Turning it off disconnects the VPN clients. Like the web UI, turning it on creates the server
+        first if the router doesn't have one yet.
 
         Args:
             enable (bool): True to turn the server on, False to turn it off.
@@ -52,6 +70,8 @@ class Wireguard(APIClient):
 
         """
         self._check_available()
+        if enable:
+            self._ensure_server()
         data = {"parameters": {"parameters": {"Enable": enable}}}
         return self.post("/sysbus/WireGuard/Server/default:_set", data)
 
@@ -63,7 +83,7 @@ class Wireguard(APIClient):
         Import the configuration into the WireGuard app on the phone or computer, as a file or as a QR code (e.g.
         qrencode -t ansiutf8 < client.conf). Keep it safe: it contains the client's private key, which the router
         doesn't keep. The client can only connect while the server is on (see set_server_enabled()): unlike the web
-        UI, this doesn't turn the server on.
+        UI, this doesn't turn the server on, but like the web UI it creates the server if the router has none yet.
 
         Args:
             name (str): 3 to 16 letters, digits, - or _, starting with a letter, e.g. "phone".
@@ -92,6 +112,7 @@ class Wireguard(APIClient):
             endpoint = (json.loads(self.post("/sysbus/NMC:getWANStatus", {"parameters": {}})).get("data") or {}).get("IPAddress")
             if not endpoint or endpoint == "0.0.0.0":
                 raise ValueError("The router has no public IPv4 address. Give an endpoint, e.g. a DynDNS host name.")
+        self._ensure_server()
         # The web UI keeps the endpoint and the router's LAN address in ExtraData, and warns when the endpoint changes.
         self.post(
             "/sysbus/WireGuard/Server/default/Client:_add",
@@ -161,8 +182,26 @@ class Wireguard(APIClient):
             raise ValueError(f"There's no WireGuard client named {name!r}. The clients are: {names}.")
         return clients[name]
 
+    def _server_names(self) -> list[str]:
+        servers = json.loads(self.server_status()).get("status") or {}
+        return [server["Alias"] for server in servers.values() if (server or {}).get("Alias")]
+
+    def _ensure_server(self) -> None:
+        """Create the WireGuard server if the router has none yet, like the web UI the first time the VPN is used.
+
+        The router allows only one server and names it itself: it refuses a second one, with or without a name. The
+        other methods use the server named "default", the name the internetbox4 gives it.
+        """
+        names = self._server_names()
+        if not names:
+            self.post("/sysbus/WireGuard/Server:_add", {"parameters": {}})
+            names = self._server_names()
+        if "default" not in names:
+            found = ", ".join(map(repr, names)) or "none"
+            raise ValueError(f"pyinternetbox uses the WireGuard server named 'default', but the router's servers are: {found}.")
+
     def _check_available(self) -> None:
         """Raise if WireGuard is turned off on this router: the web UI then doesn't offer it."""
         status = json.loads(self.app_status()).get("status") or {}
         if not any((app or {}).get("Enable") for app in status.values()):
-            raise ValueError("WireGuard isn't available on this router (Enable is false in app_status()).")
+            raise ValueError("WireGuard is turned off on this router (Enable is false in app_status()). Turn it on with set_enabled(True).")

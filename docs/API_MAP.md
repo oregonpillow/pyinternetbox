@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | Called by the web interface | 240 | 101 |
 | Functions exposed by the router (self-description) | 727 | 369 |
-| Implemented in pyinternetbox | 200 | 66 |
-| Web interface endpoints missing from pyinternetbox | 73 | 42 |
+| Implemented in pyinternetbox | 207 | 69 |
+| Web interface endpoints missing from pyinternetbox | 71 | 42 |
 | Writable parameters (generic `set`) on 315 objects | 1873 | 1873 |
 
 ## Endpoints used by the web interface
@@ -181,8 +181,10 @@
 | `VoiceService.VoiceApplication:listHandsets` |  | ✅ |  |
 | `VoiceService.VoiceApplication:listTrunks` |  | ✅ |  |
 | `WebuiupgradeService:get` |  | ✅ |  |
+| `WireGuard.Server:_add` |  | ✅ | `Enable` |
 | `WireGuard.Server:_get` |  | ✅ |  |
 | `WireGuard:_get` |  | ✅ | `Enable` |
+| `WireGuard:_set` |  | ✅ |  |
 | `eventmanager:get_events` |  | ✅ | `channelid`, `events` |
 | `eventmanager:open_channel` |  | ✅ | `events` |
 | `eventmanager:subscribe` |  | ✅ | `channelid`, `events` |
@@ -258,8 +260,6 @@
 | `VPN:getServerClient` |  |  |  |
 | `VoiceService.VoiceApplication.VoiceProfile.SIP-Extensions.SIP:get` |  |  |  |
 | `VoiceService.VoiceApplication:ring` |  |  | `duration`, `line` |
-| `WireGuard.Server:_add` |  |  | `Enable` |
-| `WireGuard:_set` |  |  |  |
 
 ## Everything the router exposes
 
@@ -408,7 +408,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 
 - `createPool(name, interface)` ✏️
 - `enableDHCPv6Server(enable)` ✏️
-- `getDHCPv6ServerStatus()`
+- `getDHCPv6ServerStatus()` ✅
 - `getPrefixInformation(pool, key?)` 🌐 ✅
 - Writable parameters: `Enable` (bool)
 
@@ -566,7 +566,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 - `getHosts()` 🌐 ✅
 - `getServices()` 🌐 ✅
 - `setEnableOnCgnat(value?)` ✏️
-- `setGlobalEnable(enable?)` ✏️
+- `setGlobalEnable(enable?)` ✏️ ✅
 - Writable parameters: `Enable` (bool), `EnableOnCgnat` (bool)
 
 ### `FMR5G`
@@ -2147,8 +2147,8 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 - `getSchedule(type, ID, info?, device?)` ✅
 - `getScheduleTypes(types?)`
 - `getSchedules(type, scheduleInfo?, target?)`
-- `overrideSchedule(type, ID, override, device?)` ✏️
-- `overrideState(type, ID, state, device?)` ✏️
+- `overrideSchedule(type, ID, override, device?)` ✏️ ✅
+- `overrideState(type, ID, state, device?)` ✏️ ✅
 - `removeSchedules(type, ID?, device?)` ✏️ 🌐 ✅
 - `updateScheduleEntries(type, ID, entries, device?)` ✏️
 
@@ -2196,7 +2196,7 @@ Besides the listed functions, every object accepts the generic `get` (read all p
 
 ### `UPnP-IGD`
 
-- `get()`
+- `get()` ✅
 - `set(parameters?)` ✏️
 - Writable parameters: `AllowedHostHeader` (string), `AlwaysStartIgdDaemon` (bool), `Enable` (bool), `FriendlyName` (string), `ModelName` (string), `ModelNumber` (string), `TR064ServiceURL` (string), `WANAccessProvider` (string)
 

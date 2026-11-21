@@ -17,16 +17,18 @@ To also run destructive tests (write to the router)::
 
 Tests that change settings are marked ``@pytest.mark.destructive``. They leave the configuration as they found it:
 they write the current value back (LED brightness, Wi-Fi TX power, firewall levels and basic actions, UPnP, WPS, DNS
-servers for devices, the DNS cache switch, ping replies, WLAN-Box sync, 6 GHz power saving), or create something
-temporary and delete it again (a disabled port forwarding rule, protocol forwarding rule, IPv6 pinhole, custom firewall
-rule and DynDNS host and a phone book contact named after ``DUMMY_RULE``, a WireGuard client, a static route to an
-unused network, and a device entry with a type and DNS name, IP address reservation, schedule, time limit and band
-steering exception for ``FAKE_MAC``, which no real device uses). They skip rather than touch existing settings, e.g. a
-DMZ host or calls in the call list. Saving the log files replaces the ones saved on the router before.
+servers for devices, the DNS cache switch, ping replies, WLAN-Box sync, 6 GHz power saving, the DynDNS and WireGuard
+switches), or create something temporary and delete it again (a disabled port forwarding rule, protocol forwarding
+rule, IPv6 pinhole, custom firewall rule and DynDNS host and a phone book contact named after ``DUMMY_RULE``, a
+WireGuard client, a static route to an unused network, and a device entry with a type and DNS name, IP address
+reservations on the home and guest networks, a schedule and its overrides, time limit and band steering exception for
+``FAKE_MAC``, which no real device uses). They skip rather than touch existing settings, e.g. a DMZ host or calls in
+the call list. Saving the log files replaces the ones saved on the router before.
 
 Tests that interrupt the network for everyone, such as turning Wi-Fi off and on, writing the Wi-Fi names or channels,
-band steering switch or the router's DNS servers back, changing a Wi-Fi standard and back, or saving a Wi-Fi schedule,
-are also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is set.
+band steering switch or the router's DNS servers back, changing a Wi-Fi standard and back, saving a Wi-Fi schedule, or
+turning WireGuard off and on, are also marked ``@pytest.mark.disruptive`` and only run when ``IB_E2E_DISRUPTIVE=1`` is
+set.
 """
 
 from __future__ import annotations
@@ -464,6 +466,37 @@ class TestE2EDHCP:
     def test_ipv6_prefix_information(self, svc):
         _ok(svc.ipv6_prefix_information())
 
+    def test_ipv6_server_status(self, svc):
+        assert _payload(svc.ipv6_server_status()) in ("Enabled", "Disabled")
+
+    def test_guest_static_leases(self, svc):
+        assert isinstance(json.loads(svc.static_leases("guest"))["status"], list)
+
+    @pytest.mark.destructive
+    def test_guest_static_lease_add_delete(self, svc, sm, fake_mac):
+        """Reserve the guest Wi-Fi address after its pool for FAKE_MAC and delete it. Skipped if it's taken."""
+        pool = json.loads(svc.server_pool())["status"].get("guest")
+        if not pool:
+            pytest.skip("This router has no guest address pool")
+
+        def leases() -> dict[str, str]:
+            return {lease["MACAddress"].upper(): lease["IPAddress"] for lease in json.loads(svc.static_leases("guest"))["status"]}
+
+        ip = str(ipaddress.ip_address(pool["MaxAddress"]) + 1)
+        if ip in leases().values():
+            pytest.skip(f"{ip} is reserved on the guest network")
+        try:
+            _no_errors(svc.add_static_lease(fake_mac, ip, pool="guest"))
+            assert leases()[fake_mac] == ip
+            assert not _has_lease(sm, fake_mac)  # not on the home network
+            _no_errors(svc.delete_static_lease(fake_mac, pool="guest"))
+            assert fake_mac not in leases()
+        finally:
+            if fake_mac in leases():
+                svc.delete_static_lease(fake_mac, pool="guest")
+            _forget(sm, fake_mac)  # also the device entry the router created for the reservation
+        assert _uses(sm, fake_mac) == []
+
     @pytest.mark.destructive
     def test_static_lease_add_delete(self, svc, sm, fake_mac, free_ip):
         def leases() -> dict[str, str]:
@@ -563,6 +596,14 @@ class TestE2EDynDNS:
 
     def test_services(self, svc):
         _ok(svc.services())
+
+    @pytest.mark.destructive
+    def test_set_enabled_reverts(self, svc):
+        """Write the current DynDNS switch back: effective no-op. The hosts stay as they are."""
+        enabled, hosts = json.loads(svc.global_enable())["status"], _dyndns_hosts(svc)
+        _no_errors(svc.set_enabled(enabled))
+        assert json.loads(svc.global_enable())["status"] is enabled
+        assert _dyndns_hosts(svc) == hosts
 
     @pytest.mark.destructive
     def test_host_add_update_delete(self, svc):
@@ -780,6 +821,9 @@ class TestE2EFirewall:
         enabled = _payload(svc.status())["UpnpPortForwardingEnable"]
         assert _no_errors(svc.set_upnp_enabled(enabled))["status"] is True
         assert _payload(svc.status())["UpnpPortForwardingEnable"] is enabled
+
+    def test_upnp_description(self, svc):
+        assert {"Enable", "FriendlyName", "ModelName"} <= set(_payload(svc.upnp_description()))
 
     def test_respond_to_ping(self, svc):
         assert set(_payload(svc.respond_to_ping())) == {"enableIPv4", "enableIPv6"}
@@ -1168,6 +1212,39 @@ class TestE2EScheduler:
             if json.loads(svc.device_schedule(fake_mac)).get("status"):
                 svc.remove_device_schedule(fake_mac)
         assert json.loads(svc.device_schedule(fake_mac))["status"] is False
+
+    @pytest.mark.destructive
+    def test_override_device_schedule(self, svc, sm, fake_mac):
+        """Override a schedule that blocks FAKE_MAC all week, lasting and until it next changes, then let
+        devices.block() end an override that allows access."""
+
+        def state() -> tuple:
+            info = json.loads(svc.device_schedule(fake_mac))["data"]["scheduleInfo"]
+            return info["value"], info["override"], info["temporaryOverride"]
+
+        try:
+            _no_errors(svc.set_device_schedule(fake_mac, [{"begin": "Mon 00:00", "end": "Sun 24:00"}], enable=False))
+            with pytest.raises(ValueError, match="is off"):
+                svc.override_device_schedule(fake_mac, "allow")
+            _no_errors(svc.enable_device_schedule(fake_mac))
+            assert state() == ("Disable", "", False)
+            svc.override_device_schedule(fake_mac, "allow")
+            assert state() == ("Enable", "Enable", False)
+            svc.override_device_schedule(fake_mac, "schedule")
+            assert state() == ("Disable", "", False)
+            svc.override_device_schedule(fake_mac, "allow", until_next_change=True)
+            assert state() == ("Enable", "", True)
+            svc.override_device_schedule(fake_mac, "schedule")  # also ends a temporary override
+            assert state() == ("Disable", "", False)
+            svc.override_device_schedule(fake_mac, "allow")
+            _make(Devices, sm).block(fake_mac)
+            assert state() == ("Disable", "", False)
+        finally:
+            if json.loads(svc.device_schedule(fake_mac)).get("status"):
+                svc.remove_device_schedule(fake_mac)
+            if _mst_id(fake_mac) in _mst_ids(sm):
+                _make(MST, sm).delete(fake_mac)  # block() turns on a daily time limit
+        assert _uses(sm, fake_mac) == []
 
     def test_wifi_schedule(self, svc):
         _ok(svc.wifi_schedule())
@@ -1766,6 +1843,38 @@ class TestE2EWireguard:
         finally:
             svc.set_server_enabled(False)
         assert enabled() is False
+
+    @staticmethod
+    def _wireguard_enabled(svc) -> bool:
+        return any(app.get("Enable") for app in json.loads(svc.app_status())["status"].values())
+
+    @pytest.mark.destructive
+    def test_set_enabled_reverts(self, svc):
+        """Write the current WireGuard switch back: effective no-op. The server and its clients stay as they are."""
+        enabled, server, clients = self._wireguard_enabled(svc), _wireguard_server(svc), _wireguard_clients(svc)
+        _no_errors(svc.set_enabled(enabled))
+        assert self._wireguard_enabled(svc) is enabled
+        assert (_wireguard_server(svc), _wireguard_clients(svc)) == (server, clients)
+
+    @pytest.mark.destructive
+    @pytest.mark.disruptive
+    def test_set_enabled_off_on(self, svc):
+        """Turn WireGuard off and on again. The server and its clients stay. Skipped if WireGuard is off or the server
+        is on: turning WireGuard off would disconnect VPN clients."""
+        if not self._wireguard_enabled(svc):
+            pytest.skip("WireGuard is off on this router")
+        if any(server.get("Enable") for server in json.loads(svc.server_status())["status"].values()):
+            pytest.skip("The WireGuard server is on; turning WireGuard off would disconnect VPN clients")
+        server, clients = _wireguard_server(svc), _wireguard_clients(svc)
+        try:
+            _no_errors(svc.set_enabled(False))
+            assert _wait_for(lambda: not self._wireguard_enabled(svc))
+            with pytest.raises(ValueError, match="WireGuard is turned off"):
+                svc.set_server_enabled(True)
+        finally:
+            svc.set_enabled(True)
+        assert _wait_for(lambda: self._wireguard_enabled(svc))
+        assert (_wireguard_server(svc), _wireguard_clients(svc)) == (server, clients)
 
 
 # ── WWAN ──────────────────────────────────────────────────────────────────────

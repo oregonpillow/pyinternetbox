@@ -125,6 +125,15 @@ def _week_time(seconds: int) -> str:
     return f"{_DAYS[day]} {rest // 3600:02d}:{rest % 3600 // 60:02d}"
 
 
+def _override(schedule: dict) -> str | None:
+    """An access schedule's override (see scheduler.override_device_schedule), e.g. "allow", or None."""
+    if schedule.get("override") in ("Enable", "Disable"):
+        return "allow" if schedule["override"] == "Enable" else "block"
+    if schedule.get("temporaryOverride"):
+        return ("allow" if schedule.get("value") == "Enable" else "block") + " until the schedule next changes"
+    return None
+
+
 def _duration(seconds: int) -> str:
     days, rest = divmod(int(seconds), 86400)
     hours, rest = divmod(rest, 3600)
@@ -520,11 +529,11 @@ def build_server(client: InternetBoxClient, options: Options | None = None, metr
 
     def lan_settings(ctx: Context) -> str:
         """The home network: the router's address, the range of addresses it gives out (DHCP), fixed IP addresses
-        reserved for devices, and static routes."""
+        reserved for devices, on the home network and the guest Wi-Fi, and static routes."""
         known = names()
 
-        def fixed_ips() -> list[dict]:
-            leases = _body(client.dhcp.static_leases()) or []
+        def fixed_ips(pool: str) -> list[dict]:
+            leases = _body(client.dhcp.static_leases(pool)) or []
             return [
                 {"device": known.get(lease["MACAddress"].upper()), "mac": lease["MACAddress"].upper(), "ip": lease["IPAddress"]}
                 for lease in leases
@@ -533,7 +542,8 @@ def build_server(client: InternetBoxClient, options: Options | None = None, metr
         return shown(
             {
                 "lan": part(lambda: _body(client.nmc.lan_ip())),
-                "fixed_ips": part(fixed_ips),
+                "fixed_ips": part(lambda: fixed_ips("default")),
+                "guest_fixed_ips": part(lambda: fixed_ips("guest")),
                 "static_routes": part(lambda: _body(client.nmc.static_routes()) or []),
             }
         )
@@ -541,8 +551,8 @@ def build_server(client: InternetBoxClient, options: Options | None = None, metr
     add(lan_settings, "read", "nmc.lan_ip")
 
     def parental_controls(ctx: Context) -> str:
-        """Parental controls: each device's internet access schedule (when it's blocked, and whether it's blocked now)
-        and daily internet time limits."""
+        """Parental controls: each device's internet access schedule (when it's blocked, whether it's blocked now, and
+        whether that's overridden) and daily internet time limits."""
         known = names()
 
         def schedules() -> list[dict]:
@@ -553,6 +563,7 @@ def build_server(client: InternetBoxClient, options: Options | None = None, metr
                     "mac": s.get("ID"),
                     "enabled": s.get("enable"),
                     "blocked_now": bool(s.get("enable")) and s.get("value") == "Disable",
+                    "override": _override(s) if s.get("enable") else None,
                     "blocked_periods": [
                         f"{_week_time(p['begin'])} to {_week_time(p['end'])}"
                         for p in s.get("schedule") or []

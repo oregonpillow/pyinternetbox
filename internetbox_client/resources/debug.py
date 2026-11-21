@@ -21,7 +21,8 @@ class Debug(APIClient):
         web UI's troubleshooting page. Once it's saved, status() shows "FileStatus": "Ready".
 
         The file stays on the router: on regular firmware it can't be downloaded (the web UI's download link, /debug,
-        only works on developer firmware; otherwise the router answers 503).
+        only works on developer firmware; otherwise the router answers 503). It can't be deleted either: the router
+        refuses DeleteFile for the admin account. Saving another log file replaces it.
 
         Returns:
             str: response content

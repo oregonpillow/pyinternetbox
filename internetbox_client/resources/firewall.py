@@ -101,6 +101,12 @@ class Firewall(APIClient):
         data = {"parameters": {"UpnpPortForwardingEnable": enable}}
         return self.post("/sysbus/Firewall:set", data)
 
+    def upnp_description(self) -> str:
+        """Get how the router presents itself to devices over UPnP: its name ("FriendlyName"), model and provider, and
+        whether its UPnP service runs ("Enable"). Whether devices may open ports with UPnP is separate (see status())."""
+        data = {"parameters": {}}
+        return self.post("/sysbus/UPnP-IGD:get", data)
+
     def dmz(self) -> str:
         """Get DMZ status"""
         data = {"parameters": {}}

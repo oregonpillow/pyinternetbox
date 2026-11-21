@@ -129,6 +129,13 @@ def test_methods_without_a_label_only_read(cls: type, name: str) -> None:
         ("wifi.set_wlan_box_sync", "write"),
         ("wifi.set_standard", "disruptive"),
         ("wifi.set_device_steering", "write"),
+        ("dhcp.static_leases", "read"),
+        ("dhcp.add_static_lease", "write"),
+        ("dhcp.ipv6_server_status", "read"),
+        ("dyndns.set_enabled", "write"),
+        ("firewall.upnp_description", "read"),
+        ("scheduler.override_device_schedule", "write"),
+        ("wireguard.set_enabled", "disruptive"),
     ],
 )
 def test_labels(method: str, expected: str) -> None:

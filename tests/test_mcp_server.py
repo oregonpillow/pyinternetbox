@@ -115,6 +115,8 @@ ANSWERS: dict[str, Any] = {
                     "ID": "AA:BB:CC:00:00:02",
                     "enable": True,
                     "value": "Disable",
+                    "override": "Disable",
+                    "temporaryOverride": False,
                     "schedule": [{"state": "Disable", "begin": 79200, "end": 111600}, {"state": "Enable", "begin": 0, "end": 10}],
                 }
             ]
@@ -126,6 +128,7 @@ ANSWERS: dict[str, Any] = {
         "data": {"subject": "MAC:AA:BB:CC:00:00:02", "enable": True, "allowedTime": dict.fromkeys(("Mon", "Tue", "Sun"), 120)},
     },
     "/sysbus/DHCPv4/Server/Pool/default:getStaticLeases": {"status": [{"MACAddress": "aa:bb:cc:00:00:01", "IPAddress": "192.168.1.20"}]},
+    "/sysbus/DHCPv4/Server/Pool/guest:getStaticLeases": {"status": [{"MACAddress": "aa:bb:cc:00:00:09", "IPAddress": "10.128.0.20"}]},
     "/sysbus/NMC:getLANIP": {"status": None, "data": {"Address": "192.168.1.1"}},
     "/sysbus/NMC/DHCPv4/DNSServers/User:get": {"status": {"DNSServers": "1.1.1.1,9.9.9.9"}},
     "/sysbus/NMC/DHCPv6/DNSServers/User:get": {"status": {"DNSServers": ""}},
@@ -366,6 +369,7 @@ def test_lan_settings(client: InternetBoxClient) -> None:
     lan = json.loads(call(build_server(client), "lan_settings")[1])
     assert lan["lan"] == {"Address": "192.168.1.1"}
     assert lan["fixed_ips"] == [{"device": "laptop", "mac": "AA:BB:CC:00:00:01", "ip": "192.168.1.20"}]
+    assert lan["guest_fixed_ips"] == [{"device": None, "mac": "AA:BB:CC:00:00:09", "ip": "10.128.0.20"}]
 
 
 def test_parental_controls(client: InternetBoxClient) -> None:
@@ -376,10 +380,25 @@ def test_parental_controls(client: InternetBoxClient) -> None:
             "mac": "AA:BB:CC:00:00:02",
             "enabled": True,
             "blocked_now": True,
+            "override": "block",
             "blocked_periods": ["Mon 22:00 to Tue 07:00"],
         }
     ]
     assert controls["daily_time_limits"] == [{"device": "Tim's phone", "mac": "AA:BB:CC:00:00:02", "enabled": True, "minutes_per_day": 120}]
+
+
+@pytest.mark.parametrize(
+    "schedule,expected",
+    [
+        ({"override": "", "temporaryOverride": False, "value": "Disable"}, None),
+        ({"override": "Enable", "temporaryOverride": False, "value": "Enable"}, "allow"),
+        ({"override": "", "temporaryOverride": True, "value": "Enable"}, "allow until the schedule next changes"),
+        ({"override": "", "temporaryOverride": True, "value": "Disable"}, "block until the schedule next changes"),
+        ({}, None),
+    ],
+)
+def test_override(schedule: dict, expected: str | None) -> None:
+    assert mcp_server._override(schedule) == expected
 
 
 def test_remote_access_hides_secrets(client: InternetBoxClient) -> None:

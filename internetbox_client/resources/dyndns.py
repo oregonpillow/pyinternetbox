@@ -25,6 +25,24 @@ class DynDNS(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/DynDNS:getGlobalEnable", data)
 
+    @write
+    def set_enabled(self, enable: bool) -> str:
+        """Turn DynDNS on or off for all hosts at once, including Swisscom's.
+
+        While it's off, the router doesn't update any host name when its public IP address changes: their "status" in
+        hosts() is "BLOCKED". Each host keeps its own switch ("enable" in hosts()), and turning DynDNS back on updates
+        the hosts that are on right away.
+
+        Args:
+            enable (bool): True to turn DynDNS on, False to turn it off.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"enable": enable}}
+        return self.post("/sysbus/DynDNS:setGlobalEnable", data)
+
     def hosts(self) -> str:
         """Get DynDNS hosts"""
         data = {"parameters": {}}

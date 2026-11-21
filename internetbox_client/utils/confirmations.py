@@ -62,6 +62,10 @@ QUESTIONS: dict[tuple[str, str], tuple[str, Callable[[Mapping[str, object]], boo
         "internet access except for the ports that rules allow.",
         lambda args: args["action"] == "block" and args["direction"] == "outbound",
     ),
+    ("wireguard", "set_enabled"): (
+        "Turn off WireGuard? Its VPN server stops, and connected VPN clients lose their connection.",
+        lambda args: not args["enable"],
+    ),
     ("wireguard", "set_server_enabled"): (
         "Turn off the WireGuard VPN server? Connected VPN clients lose their connection.",
         lambda args: not args["enable"],
