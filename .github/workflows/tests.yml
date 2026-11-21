@@ -45,15 +45,5 @@ jobs:
       - name: Deptry check
         run: uv run deptry .
 
-      - name: Check requirements.txt is up to date
-        run: |
-          uv export --no-dev --no-header --output-file /tmp/requirements.txt
-          diff requirements.txt /tmp/requirements.txt
-
-      - name: Check requirements-dev.txt is up to date
-        run: |
-          uv export --only-dev --no-header --output-file /tmp/requirements-dev.txt
-          diff requirements-dev.txt /tmp/requirements-dev.txt
-
       - name: Run tests
         run: uv run pytest --cov --cov-report=term-missing

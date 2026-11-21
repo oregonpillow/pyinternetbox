@@ -3,24 +3,6 @@ repos:
     rev: 0.11.6
     hooks:
       - id: uv-lock
-      - id: uv-export
-        name: requirements.txt
-        args: [--quiet, --no-dev, --no-header, --output-file, requirements.txt]
-        pass_filenames: false
-        always_run: true
-
-      - id: uv-export
-        name: requirements-dev.txt
-        args:
-          [
-            --quiet,
-            --only-dev,
-            --no-header,
-            --output-file,
-            requirements-dev.txt,
-          ]
-        pass_filenames: false
-        always_run: true
 
   - repo: local
     hooks:
