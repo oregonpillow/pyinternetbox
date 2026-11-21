@@ -72,8 +72,10 @@ def test_main(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> Non
 
 
 def test_every_release_in_the_changelog_has_notes() -> None:
+    """Every released version's section has notes. "Unreleased" is empty right after a release."""
     changelog = (_SCRIPT.parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
     versions = [line.split("]")[0].removeprefix("## [") for line in changelog.splitlines() if line.startswith("## [")]
+    versions = [version for version in versions if version != "Unreleased"]
     assert versions
     for version in versions:
         assert release_notes.release_notes(version, changelog).strip(), version

@@ -4,6 +4,10 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-22
+
+More of the router's settings, in the library and as `ibox` commands: Wi-Fi band steering and standards, the DNS servers the router asks, firewall extras such as IPv6 pinholes, device types and DNS names, and overriding a device's access schedule for now. The exporter adds DNS query counters. Existing code, commands and metrics keep working as before.
+
 ### Added
 
 - **Wi-Fi**: turn band steering on or off (`wifi.set_steering_enabled()`), leave a device out of band steering or keep it on the router or a WLAN-Box (`wifi.set_device_steering()`), choose the newest Wi-Fi standard each band offers, e.g. Wi-Fi 6 instead of 7 (`wifi.set_standard()`), and whether WLAN-Boxes turn their Wi-Fi on and off with the router's (`wifi.set_wlan_box_sync()`).
@@ -13,9 +17,9 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 - **Parental controls**: allow or block a device's internet access now, whatever its schedule says, e.g. for one more evening (`scheduler.override_device_schedule()`). The override lasts until it's set back to `"schedule"`, or with `until_next_change=True` until the schedule next switches the other way.
 - **Firewall**: whether the router answers pings from the internet (`firewall.respond_to_ping()`, `set_respond_to_ping()`), forwarding whole IP protocols such as GRE to a device (`firewall.protocol_forwarding()`, `set_protocol_forwarding()`, `delete_protocol_forwarding()`), IPv6 pinholes (`firewall.ipv6_pinholes()`, `set_ipv6_pinhole()`, `delete_ipv6_pinhole()`), deleting all port forwarding rules at once (`firewall.delete_all_port_forwarding()`), and how the router presents itself to devices over UPnP (`firewall.upnp_description()`).
 - **Remote access**: turn DynDNS on or off for all hosts at once (`dyndns.set_enabled()`), and WireGuard as a whole, which the web interface can't (`wireguard.set_enabled()`). Like the web interface, `wireguard.set_server_enabled(True)` and `add_client()` create the VPN server first on a router that doesn't have one yet.
-- **Troubleshooting**: save a log file for technical support and a Wi-Fi debug snapshot on the router (`debug.save_log_file()`, `debug.save_wifi_logs()`).
-- **Exporter**: DNS query counts since the router last booted: how many queries the router answered itself or passed on, and per DNS server how many it sent, failed or retried (`internetbox_dns_*_total`). See "DNS query metrics" in the README.
-- **CLI**: turning band steering on, changing a Wi-Fi standard or the router's DNS servers, deleting all port forwarding rules, resetting the traffic counters and turning WireGuard off ask for confirmation first, and so does the MCP server.
+- **Troubleshooting**: save a log file for technical support and a Wi-Fi debug snapshot on the router (`debug.save_log_file()`, `debug.save_wifi_logs()`). The log file stays on the router: on regular firmware it can't be downloaded, and the admin account can't delete it.
+- **Exporter**: DNS query counts since the router last booted: how many queries the router answered itself or passed on, how many answers its DNS cache added or dropped to make room, and per DNS server how many queries it sent, failed or retried (`internetbox_dns_*_total`). See "DNS query metrics" in the README.
+- **CLI**: turning band steering on, changing a Wi-Fi standard or the DNS servers the router asks, deleting all port forwarding rules, resetting the traffic counters and turning WireGuard off ask for confirmation first, and so does the MCP server.
 - **MCP server**: `lan_settings` also lists the guest Wi-Fi's fixed IP addresses, and `parental_controls` shows whether a device's schedule is overridden.
 
 ### Changed
@@ -69,7 +73,8 @@ pyinternetbox can now change the router's settings, like the switches and forms 
 
 First release: the Python library, the `ibox` CLI and a Prometheus exporter with Grafana dashboards, for Swisscom and Wingo Internet Box routers. Published on PyPI and as the Docker image `oregonpillow/pyinternetbox`.
 
-[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/oregonpillow/pyinternetbox/releases/tag/v0.1.0
