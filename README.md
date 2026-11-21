@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4.jpg" width="100%" alt="Grafana Dashboard" />
+  <img src="https://raw.githubusercontent.com/oregonpillow/pyinternetbox/master/grafana/internetbox4.jpg" width="50%" alt="Grafana Dashboard" />
   <h1 style="font-size: 28px; margin: 10px 0;">pyinternetbox</h1>
-  <p style="font-size: 16px; margin: 0;"><b>Your Swisscom Internet Box, fully observable and programmable.</b></p>
-  <p>Python library, CLI tool, MCP server and exporters for Swisscom / Wingo Internet Box routers.</p>
+  <p style="font-size: 16px; margin: 0;"><b>Your Swisscom Internet Box - with batteries included.</b></p>
+  <p>Python library | CLI | MCP server | Prometheus exporters | Grafana dashboards</p>
 </div>
 <br>
 
