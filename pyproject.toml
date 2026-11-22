@@ -64,9 +64,15 @@ include = ["internetbox_client", "tests", "README.md", "LICENSE"]
 
 [tool.ruff]
 line-length = 140
+# Ruff 0.16+ also formats Python code blocks in Markdown; prettier handles the Markdown here
+extend-exclude = ["*.md"]
 
 [tool.ruff.format]
 skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+# The default rule set from before Ruff 0.16, which enables many more rules by default
+select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.isort]
 case-sensitive = true
