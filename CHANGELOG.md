@@ -4,17 +4,25 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-22
+
+See how often and why the router restarted, in the library, as `ibox nmc` commands, in the exporter and in the MCP server, and the internet connection's MTU. The exporter now needs the router password, and the Docker image no longer runs as root: see the upgrade notes.
+
+### Upgrade notes
+
+- `ibox export`, and so the Docker image, needs the router password (`IB_PASSWORD` or `--password`). It stops straight away if the password is missing or the router refuses it. It used to keep running, with only the fiber connection's `internetbox_veip_*` metrics, and try to log in again every cycle. If the router can't be reached, e.g. while it restarts, the exporter starts anyway and keeps trying, as before.
+- The Docker image runs as an unprivileged user (UID 10001) instead of root, which Kubernetes' `runAsNonRoot` accepts, and no longer contains pip or uv. The exporter needs no files, so nothing changes for it. Files you mount into the container, e.g. a backup for `ibox nmc restore`, must be readable by UID 10001, and images built on it can't install packages with pip.
+
 ### Added
 
-- **Restarts**: how often the router has started (`nmc.reboot_info()`), and when and why it last started and shut down, e.g. after a power cut, a firmware upgrade or `nmc.reboot()` (`nmc.reboot_history()`).
+- **Restarts**: how often the router has started (`nmc.reboot_info()`), and when and why it started and shut down the last 10 times, e.g. after a power cut, a firmware upgrade or `nmc.reboot()` (`nmc.reboot_history()`).
 - **Internet connection**: its MTU, the largest packet it sends without splitting it (`nmc.wan_mtu()`).
 - **Exporter**: how often the router has started (`internetbox_boots_total`), so `increase()` shows its restarts. See "Restart metric" in the README.
 - **MCP server**: `router_overview` shows how often the router has started (`boots`).
 
-### Changed
+### Removed
 
-- **Exporter**: `ibox export` stops straight away if the router password is missing, or the router refuses it, instead of running without metrics and trying to log in again every cycle. If the router can't be reached, e.g. while it restarts, it starts anyway and keeps trying, as before.
-- **Docker image**: runs as an unprivileged user (UID 10001) instead of root, and no longer contains pip or uv. The exporter needs no files, so nothing changes for it. Files you mount into the container must be readable by UID 10001.
+- `requirements.txt` and `requirements-dev.txt` in the repository. Install from a clone with `pip install -e .`, or `uv sync` for development.
 
 ## [0.3.0] - 2026-11-22
 
@@ -85,7 +93,8 @@ pyinternetbox can now change the router's settings, like the switches and forms 
 
 First release: the Python library, the `ibox` CLI and a Prometheus exporter with Grafana dashboards, for Swisscom and Wingo Internet Box routers. Published on PyPI and as the Docker image `oregonpillow/pyinternetbox`.
 
-[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.0...v0.1.1
