@@ -22,13 +22,13 @@ New files and changes not committed yet:
 
 !`git status --short --untracked-files=all`
 
-The commit messages are short, so read the changes themselves: `git diff <last release> -- <path>` for the library (`internetbox_client/`), the CLI (`internetbox_client/cli.py`), the exporter, the MCP server, `pyproject.toml`, `Dockerfile`, `docker-compose.yml` and `README.md`, and the new files. Leave out tests, CI and refactoring unless users notice them.
+The commit messages are short, so read the changes themselves: `git diff <last release> -- <path>` for the library (`internetbox_client/`), the CLI (`internetbox_client/cli.py`), the exporter, the MCP server, `pyproject.toml`, `Dockerfile`, `docker-compose.yml`, `README.md` and the documentation in `docs/`, and the new files. Leave out tests, CI and refactoring unless users notice them.
 
 Look for changes that could break someone's code, scripts, dashboards or setup: public methods, arguments, CLI commands or options that were removed or renamed, changed defaults or output, renamed metrics or labels, environment variables, the minimum Python version and dependencies. To compare the public methods, list each resource class's methods at the last release (`git show <tag>:<path>`) and now.
 
 ## The version
 
-The version is $ARGUMENTS. If it's empty, propose one following the README's rules (Releasing > Choosing the version) and ask before writing anything. If there are breaking changes but only the patch or minor number goes up, say so.
+The version is $ARGUMENTS. If it's empty, propose one following the rules in `docs/contributing/releasing.md` ("Choosing the version") and ask before writing anything. If there are breaking changes but only the patch or minor number goes up, say so.
 
 ## The section
 

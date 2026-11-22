@@ -190,7 +190,7 @@ class Firewall(APIClient):
     ) -> str:
         """Add a port forwarding rule, or update the rule with this name.
 
-        The rule shows up in the web UI like rules created there, with the ID "webui_<name>".
+        The rule shows up in the web UI like rules created there, with the ID `webui_<name>`.
 
         Args:
             name (str): rule name, e.g. "minecraft".

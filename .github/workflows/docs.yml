@@ -1,0 +1,42 @@
+name: Docs
+
+# Publishes the documentation site to GitHub Pages. release.yml calls it after a release, so the site describes the
+# version on PyPI. Run it by hand (Actions → Docs → Run workflow) to publish documentation fixes without a release.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # --strict fails the build on broken links. The library reference is read from the source, so the package
+      # itself isn't installed.
+      - name: Build the site
+        run: uv run --locked --only-group docs zensical build --clean --strict
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

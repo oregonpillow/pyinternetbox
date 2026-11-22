@@ -53,11 +53,3 @@ repos:
         types: [markdown]
         pass_filenames: false
         always_run: true
-
-      - id: doctoc
-        name: doctoc
-        language: system
-        entry: npx doctoc --update-only README.md
-        types: [markdown]
-        pass_filenames: false
-        always_run: true

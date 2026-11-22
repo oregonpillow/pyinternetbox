@@ -1,7 +1,8 @@
 name: Release
 
 # master push  -> Docker image  oregonpillow/pyinternetbox:edge
-# tag vX.Y.Z   -> PyPI package, Docker images :X.Y.Z, :X.Y and :latest, GitHub Release with the notes from CHANGELOG.md
+# tag vX.Y.Z   -> PyPI package, Docker images :X.Y.Z, :X.Y and :latest, GitHub Release with the notes from CHANGELOG.md,
+#                 then the documentation site on GitHub Pages (docs.yml)
 #
 # The version always comes from the git tag (via hatch-vcs); nothing else needs bumping.
 
@@ -146,3 +147,12 @@ jobs:
           files: dist/*
           body_path: release-notes.md
           generate_release_notes: true # adds the "Full Changelog" link below the notes
+
+  docs:
+    if: github.ref_type == 'tag'
+    needs: github-release
+    uses: ./.github/workflows/docs.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

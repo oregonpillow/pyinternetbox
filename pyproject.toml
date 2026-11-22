@@ -30,6 +30,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/oregonpillow/pyinternetbox"
+Documentation = "https://oregonpillow.github.io/pyinternetbox/"
 Repository = "https://github.com/oregonpillow/pyinternetbox"
 Issues = "https://github.com/oregonpillow/pyinternetbox/issues"
 Releases = "https://github.com/oregonpillow/pyinternetbox/releases"
@@ -101,4 +102,8 @@ dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.8",
+]
+docs = [
+    "mkdocstrings-python>=2.0.11",
+    "zensical>=0.1.3",
 ]

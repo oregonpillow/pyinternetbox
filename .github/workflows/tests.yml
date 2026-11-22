@@ -47,3 +47,7 @@ jobs:
 
       - name: Run tests
         run: uv run pytest --cov --cov-report=term-missing
+
+      # --strict fails on broken links. The release runs these tests first, so the site can't fail after publishing.
+      - name: Build the documentation site
+        run: uv run --locked --group docs zensical build --clean --strict

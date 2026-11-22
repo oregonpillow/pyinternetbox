@@ -4,6 +4,10 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 
 ## [Unreleased]
 
+### Added
+
+- **Documentation site** at <https://oregonpillow.github.io/pyinternetbox/>, published with each release. It has the README's former contents, the contributor docs and a reference of every library method, generated from the docstrings. The README is now a short overview that links to it.
+
 ## [0.3.1] - 2026-11-22
 
 See how often and why the router restarted, in the library, as `ibox nmc` commands, in the exporter and in the MCP server, and the internet connection's MTU. The exporter now needs the router password, and the Docker image no longer runs as root: see the upgrade notes.
@@ -17,7 +21,7 @@ See how often and why the router restarted, in the library, as `ibox nmc` comman
 
 - **Restarts**: how often the router has started (`nmc.reboot_info()`), and when and why it started and shut down the last 10 times, e.g. after a power cut, a firmware upgrade or `nmc.reboot()` (`nmc.reboot_history()`).
 - **Internet connection**: its MTU, the largest packet it sends without splitting it (`nmc.wan_mtu()`).
-- **Exporter**: how often the router has started (`internetbox_boots_total`), so `increase()` shows its restarts. See "Restart metric" in the README.
+- **Exporter**: how often the router has started (`internetbox_boots_total`), so `increase()` shows its restarts. See [Restart metric](https://oregonpillow.github.io/pyinternetbox/exporter/#restart-metric).
 - **MCP server**: `router_overview` shows how often the router has started (`boots`).
 
 ### Removed
@@ -38,7 +42,7 @@ More of the router's settings, in the library and as `ibox` commands: Wi-Fi band
 - **Firewall**: whether the router answers pings from the internet (`firewall.respond_to_ping()`, `set_respond_to_ping()`), forwarding whole IP protocols such as GRE to a device (`firewall.protocol_forwarding()`, `set_protocol_forwarding()`, `delete_protocol_forwarding()`), IPv6 pinholes (`firewall.ipv6_pinholes()`, `set_ipv6_pinhole()`, `delete_ipv6_pinhole()`), deleting all port forwarding rules at once (`firewall.delete_all_port_forwarding()`), and how the router presents itself to devices over UPnP (`firewall.upnp_description()`).
 - **Remote access**: turn DynDNS on or off for all hosts at once (`dyndns.set_enabled()`), and WireGuard as a whole, which the web interface can't (`wireguard.set_enabled()`). Like the web interface, `wireguard.set_server_enabled(True)` and `add_client()` create the VPN server first on a router that doesn't have one yet.
 - **Troubleshooting**: save a log file for technical support and a Wi-Fi debug snapshot on the router (`debug.save_log_file()`, `debug.save_wifi_logs()`). The log file stays on the router: on regular firmware it can't be downloaded, and the admin account can't delete it.
-- **Exporter**: DNS query counts since the router last booted: how many queries the router answered itself or passed on, how many answers its DNS cache added or dropped to make room, and per DNS server how many queries it sent, failed or retried (`internetbox_dns_*_total`). See "DNS query metrics" in the README.
+- **Exporter**: DNS query counts since the router last booted: how many queries the router answered itself or passed on, how many answers its DNS cache added or dropped to make room, and per DNS server how many queries it sent, failed or retried (`internetbox_dns_*_total`). See [DNS query metrics](https://oregonpillow.github.io/pyinternetbox/exporter/#dns-query-metrics).
 - **CLI**: turning band steering on, changing a Wi-Fi standard or the DNS servers the router asks, deleting all port forwarding rules, resetting the traffic counters and turning WireGuard off ask for confirmation first, and so does the MCP server.
 - **MCP server**: `lan_settings` also lists the guest Wi-Fi's fixed IP addresses, and `parental_controls` shows whether a device's schedule is overridden.
 
@@ -68,10 +72,10 @@ pyinternetbox can now change the router's settings, like the switches and forms 
   - Backups: save all settings to a file and restore them (`ibox nmc backup`, `ibox nmc restore`), or back them up to Swisscom (`ibox nmc backup-to-swisscom`).
   - Restarting the router (`ibox nmc reboot`), editing and deleting phone book contacts, deleting calls or clearing the call list, and 6 GHz Wi-Fi power saving.
 - **Overviews**: `ibox devices summary` and `ibox wifi summary` (`devices.summary()`, `wifi.summary()`) give a short list of the devices and the Wi-Fi networks, and `firewall.custom_rules()` lists the custom firewall rules.
-- **MCP server** for AI apps such as OpenCode or Claude Desktop: `ibox mcp`, installed with `pip install "pyinternetbox[mcp]"`. It's read-only unless started with `--allow-writes` or `--allow-disruptive`. Changes that cut connections ask you first, and passwords and keys stay hidden unless you add `--show-secrets`. `ibox mcp-exporter` collects its usage metrics for Prometheus. See the README for the setup.
+- **MCP server** for AI apps such as OpenCode or Claude Desktop: `ibox mcp`, installed with `pip install "pyinternetbox[mcp]"`. It's read-only unless started with `--allow-writes` or `--allow-disruptive`. Changes that cut connections ask you first, and passwords and keys stay hidden unless you add `--show-secrets`. `ibox mcp-exporter` collects its usage metrics for Prometheus. See [MCP server](https://oregonpillow.github.io/pyinternetbox/mcp/) for the setup.
 - **CLI**: commands that cut connections, e.g. a restart, turning Wi-Fi off or a new Wi-Fi password, ask for confirmation first. Add `--yes` to skip the question in scripts. Lists can be given comma-separated (`ibox dns set-device-servers 1.1.1.1,9.9.9.9`) and other values as JSON.
 - **Library**: `action(method)` tells whether a method only reads, changes settings, or cuts connections (`"read"`, `"write"` or `"disruptive"`), and `hide_secrets()` replaces passwords and keys in a response with `"<hidden>"`. `nmc.wan_status(details=True)` also returns the public IP addresses, the gateway and the provider's DNS servers.
-- **For contributors**: `scripts/discover_endpoints.py` and [docs/API_MAP.md](docs/API_MAP.md) list every endpoint the web interface uses and every function the router offers, and which ones the library covers.
+- **For contributors**: `scripts/discover_endpoints.py` and [docs/API_MAP.md](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/API_MAP.md) list every endpoint the web interface uses and every function the router offers, and which ones the library covers.
 
 ### Changed
 

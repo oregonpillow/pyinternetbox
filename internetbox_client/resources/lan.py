@@ -29,7 +29,7 @@ class LAN(APIClient):
 
         Args:
             flag (str): filter expression for parameters. Default is "bridge enabled && !wan"
-            to get parameters of the LAN bridge interface only.
+                to get parameters of the LAN bridge interface only.
         """
         data = {"parameters": {"flag": flag, "traverse": "all", "name": "STPEnable"}}
         return self.post("/sysbus/NeMo/Intf/lan:getParameters", data)

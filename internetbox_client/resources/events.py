@@ -80,9 +80,9 @@ class Events(APIClient):
 
         Args:
             events (Sequence[Mapping[str, Any]]): list of event subscription dicts. Each dict can be:
-                - {"service": "<service>", "event": "<event_type>"} for service events
-                - {"service": "<service>", "event": "<event_type>", "data": {"key": "value"}} for queried events
-                - {"handler": "<handler_path>"} for handler events
+                - `{"service": "<service>", "event": "<event_type>"}` for service events
+                - `{"service": "<service>", "event": "<event_type>", "data": {"key": "value"}}` for queried events
+                - `{"handler": "<handler_path>"}` for handler events
                 Multiple types can be mixed in the same list.
 
         Returns:

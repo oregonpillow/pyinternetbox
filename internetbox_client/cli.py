@@ -430,9 +430,9 @@ def mcp_server(
 ) -> None:
     """Start an MCP server over stdio, for AI apps such as OpenCode or Claude Desktop.
 
-    The app starts this command itself: see the README for its configuration.
+    The app starts this command itself: see https://oregonpillow.github.io/pyinternetbox/mcp/ for its configuration.
     Reads are always offered; changes need --allow-writes or --allow-disruptive.
-    Needs pyinternetbox's optional mcp dependencies (see the README).
+    Needs pyinternetbox's optional mcp dependencies: pip install "pyinternetbox[mcp]".
     """
     try:
         from internetbox_client.mcp_server.server import Options, build_server

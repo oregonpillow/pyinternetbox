@@ -9,7 +9,7 @@ _SECRET_KEY = re.compile(r"\w*(password|passphrase|secret|presharedkey|psk|priva
 
 
 def hide_secrets(data: Any) -> Any:
-    """Return a copy of a decoded response with passwords, keys and other secrets replaced by "<hidden>".
+    """Return a copy of a decoded response with passwords, keys and other secrets replaced by `"<hidden>"`.
 
     Secrets are recognised by their key, e.g. KeyPassPhrase (Wi-Fi), password (DynDNS) or PreSharedKey (WireGuard).
     Empty values stay, so it's still visible that none is set, and so do booleans such as UseSyncToken. A method whose

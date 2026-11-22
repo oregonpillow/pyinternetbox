@@ -7,7 +7,7 @@ from internetbox_client.utils.labels import write
 
 
 class LED(APIClient):
-    """Control and LED brightness on the Internet Box."""
+    """The Internet Box's LEDs: their brightness and status."""
 
     def status(self, type: Literal["Status", "Wireless"]) -> str:
         """Get LED Brightness Status
