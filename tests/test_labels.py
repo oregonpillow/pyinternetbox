@@ -136,6 +136,9 @@ def test_methods_without_a_label_only_read(cls: type, name: str) -> None:
         ("firewall.upnp_description", "read"),
         ("scheduler.override_device_schedule", "write"),
         ("wireguard.set_enabled", "disruptive"),
+        ("nmc.wan_mtu", "read"),
+        ("nmc.reboot_info", "read"),
+        ("nmc.reboot_history", "read"),
     ],
 )
 def test_labels(method: str, expected: str) -> None:

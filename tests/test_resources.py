@@ -1575,6 +1575,18 @@ class TestNMC:
         svc.wan_status(details=True)
         assert mock_session_manager.post.call_args[0] == ("/sysbus/NMC:getWANStatus", {"parameters": {}}, True)
 
+    @pytest.mark.parametrize(
+        "method,endpoint,parameters",
+        [
+            ("wan_mtu", "/sysbus/NeMo/Intf/data:getParameters", {"name": "MTU", "traverse": "down"}),
+            ("reboot_info", "/sysbus/NMC/Reboot:get", {}),
+            ("reboot_history", "/sysbus/NMC/Reboot/Reboot:get", {}),
+        ],
+    )
+    def test_reads_need_the_password(self, mock_session_manager: MagicMock, method: str, endpoint: str, parameters: dict) -> None:
+        getattr(_make_resource(NMC, mock_session_manager), method)()
+        mock_session_manager.post.assert_called_once_with(endpoint, {"parameters": parameters}, True)
+
     def test_bdd_uses_ws(self, mock_session_manager: MagicMock) -> None:
         svc = _make_resource(NMC, mock_session_manager)
         svc.bdd()

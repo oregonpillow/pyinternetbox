@@ -4,6 +4,11 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 
 ## [Unreleased]
 
+### Added
+
+- **Restarts**: how often the router has started (`nmc.reboot_info()`), and when and why it last started and shut down, e.g. after a power cut, a firmware upgrade or `nmc.reboot()` (`nmc.reboot_history()`).
+- **Internet connection**: its MTU, the largest packet it sends without splitting it (`nmc.wan_mtu()`).
+
 ## [0.3.0] - 2026-11-22
 
 More of the router's settings, in the library and as `ibox` commands: Wi-Fi band steering and standards, the DNS servers the router asks, firewall extras such as IPv6 pinholes, device types and DNS names, and overriding a device's access schedule for now. The exporter adds DNS query counters. Existing code, commands and metrics keep working as before.

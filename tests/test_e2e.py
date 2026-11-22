@@ -1048,6 +1048,19 @@ class TestE2ENMC:
     def test_wan_status(self, svc):
         _ok(svc.wan_status())
 
+    def test_wan_mtu(self, svc):
+        mtus = _payload(svc.wan_mtu())
+        assert mtus and all(isinstance(mtu, int) and mtu > 0 for mtu in mtus.values())
+
+    def test_reboot_info(self, svc):
+        assert {"BootCounter", "WatchdogRebootCounter", "RebootSinceLastUpgrade"} <= _payload(svc.reboot_info()).keys()
+
+    def test_reboot_history(self, svc):
+        boot_counter, history = _payload(svc.reboot_info())["BootCounter"], _payload(svc.reboot_history())
+        assert 1 <= len(history) <= 10
+        assert str(boot_counter) in history  # the current start is the newest entry
+        assert all({"BootDate", "BootReason", "ShutdownDate", "ShutdownReason"} <= start.keys() for start in history.values())
+
     def test_orientation(self, svc):
         _ok(svc.orientation())
 

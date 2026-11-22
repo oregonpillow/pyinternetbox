@@ -87,6 +87,18 @@ class NMC(APIClient):
         data = {"parameters": {}}
         return self.post("/sysbus/NMC:getWANStatus", data, auth_required=details)
 
+    def wan_mtu(self) -> str:
+        """Get the MTU of the internet connection: the largest packet, in bytes, it sends without splitting it.
+
+        The router answers per interface, e.g. {"veip0": 1500} for a fiber connection.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {"name": "MTU", "traverse": "down"}}
+        return self.post("/sysbus/NeMo/Intf/data:getParameters", data)
+
     def orientation(self) -> str:
         """Get device orientation"""
         data = {"parameters": {}}
@@ -110,6 +122,31 @@ class NMC(APIClient):
         """
         data = {"parameters": {"reason": reason}}
         return self.post("/sysbus/NMC:reboot", data)
+
+    def reboot_info(self) -> str:
+        """Get how often the router has started: BootCounter counts every start, and WatchdogRebootCounter and
+        RebootSinceLastUpgrade count some of them. reboot_history() shows when and why it last started.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {}}
+        return self.post("/sysbus/NMC/Reboot:get", data)
+
+    def reboot_history(self) -> str:
+        """Get the router's last 10 starts: when and why it started (BootDate, BootReason) and shut down before.
+
+        BootReason is e.g. "POR" when it was switched on, also after a power cut, "NMC" after reboot() or a restart in
+        the web UI, or "Watchdog". ShutdownReason is the reason given to reboot(), or "Upgrade" for a firmware upgrade.
+        A ShutdownDate of 0001-01-01T00:00:00Z means no shutdown was recorded: the router lost power, or it's still running.
+
+        Returns:
+            str: response content
+
+        """
+        data = {"parameters": {}}
+        return self.post("/sysbus/NMC/Reboot/Reboot:get", data)
 
     @secret_result
     def backup(self) -> str:

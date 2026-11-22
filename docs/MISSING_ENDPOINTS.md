@@ -19,7 +19,7 @@ Methods left out on purpose, because a mistake could lock you out of the router 
 
 ## The web interface's missing endpoints
 
-From [API_MAP.md](API_MAP.md) of 2026-11-21 (IB4-00, firmware 15.21.36): the web interface calls 240 endpoints, and pyinternetbox implements all but 73. This section sorts those 73, plus a few useful ones that only the router has. The areas marked ✅ are done.
+From [API_MAP.md](API_MAP.md) of 2026-11-22 (IB4-00, firmware 15.21.36): the web interface calls 240 endpoints, and pyinternetbox implements all but 71. This section sorts those 71, plus a few useful ones that only the router has. The areas marked ✅ are done.
 
 ### Worth adding next
 
@@ -34,6 +34,7 @@ From [API_MAP.md](API_MAP.md) of 2026-11-21 (IB4-00, firmware 15.21.36): the web
 | ✅ | Devices | Done: `devices.set_type()`, `set_dns_name()`, `remove_dns_name()` and `reset_name()`. `set_type()` sets `DeviceType` with `Devices.Device.{id}:set`, like the web interface, instead of `setType`. Tested live: a DNS name works straight away, also as `<name>.home`, and replaces the displayed name in the router's DNS until it's removed. | `Devices.Device.{id}:setType`, `setName` (source `dns`), `removeName` | |
 | ✅ | WireGuard | Done: `wireguard.set_enabled()`, and `set_server_enabled(True)` and `add_client()` create the server first on a router without one. Tested live: while WireGuard is off, its `Status` is `Disabled`, the server and clients stay, and turning it on brings them back unchanged. The web interface defines `WireGuard:_set` but never calls it. Like the web interface, `WireGuard.Server:_add` is sent without parameters: the router names the server itself and allows only one. It refused a second server with "duplicate keys", with or without an `Alias`, port or subnet, so creating one couldn't be tested on a router that has one. | `WireGuard:_set`, `WireGuard.Server:_add` | 🌐 |
 | ✅ | Small extras | Done: `dyndns.set_enabled()`, `dhcp.ipv6_server_status()`, `pool="guest"` for `dhcp.static_leases()`, `add_static_lease()` and `delete_static_lease()`, `scheduler.override_device_schedule()` and `firewall.upnp_description()`. Tested live: while DynDNS is off, each host's `status` is `BLOCKED`, and turning it on updates them again within seconds. The guest pool (`10.128.0.0/16`) refuses addresses outside its network and the router's own, and a reservation creates a device entry, like on the home network. `overrideSchedule` lasts until it's set back to `""`, also through turning the schedule off and on; `addSchedule` ends it. `overrideState` (`until_next_change=True`) sets `temporaryOverride` and lasts until the schedule next switches the other way. Neither works without a schedule ("Invalid function parameter (ID)"), and an override has no effect while the schedule is off. | `DynDNS:setGlobalEnable`, `DHCPv6.Server:getDHCPv6ServerStatus`, `DHCPv4.Server.Pool.{id}:getStaticLeases` (id `guest`), `Scheduler:overrideSchedule`, `overrideState`, `UPnP-IGD:get` | |
+| ✅ | Restarts and MTU | Done: `nmc.reboot_info()`, `nmc.reboot_history()` and `nmc.wan_mtu()`: how often the router started, when and why it last started and shut down, and the internet connection's MTU. ⚠️ Its VLAN ID can't be read: `admin` gets "Permission denied" for the VLAN interface. | `NMC.Reboot:get`, `NMC.Reboot.Reboot:get`, `NeMo.Intf.{id}:getParameters` (`MTU`) | |
 | ⬜ | Wi-Fi extenders | Unpair a WLAN-Box, set its LED brightness, its backhaul and roaming settings, and read its interfaces or call its own functions (the web interface reads its station stats and temperature that way). Needs a WLAN-Box to test. | `Devices.Device.{id}.SSW:unpair`, `Devices.Device.{id}.SSW.LED.Status:set`, `SSW.Steering.Device.{id}.APRoaming.Config:get`, `set`, `SSW.Steering.Device.{id}.APRoaming:get`, `Devices.Device.{id}.LDevice:get`, `Devices.Device.{id}.SSW:execAPI` | 🌐 |
 | ⬜ | Telephony (library only) | DECT on or off, eco mode, PIN, pairing, reset, removing all handsets, the DECT signal strength, ringing or unpairing a handset, unpairing a DECT repeater, naming DECT ULE devices, handset settings, ring groups, marking calls as seen, ringing a line, detecting phones on the analog ports, the SIP settings, phonebook backup and CardDAV sync. | `NMC:set` (`GlobalEnableDect`), `DECT:setBaseState`, `setNEMoState`, `setPIN`, `startPairing`, `stopPairing`, `reset`, `removeAllHandsets`, `getRSSI`, `Devices.Device.{id}:ring`, `deRegister`, `unPair`, `setName`, `VoiceService.VoiceApplication:setHandset`, `deleteHandset`, `setGroups`, `setViewedCallList`, `ring`, `startFXSDetection`, `VoiceService.VoiceApplication.VoiceProfile.SIP-Extensions.SIP:get`, `NMC.PhonebookBackup:set`, `CardDav:syncContacts` | 🌐 |
 
@@ -55,7 +56,7 @@ Each of these changes the internet connection or the home network for every devi
 
 ### Not needed, or not on the internetbox4
 
-The rest of the web interface's 73:
+The rest of the web interface's 71:
 
 - Logging in and out: `sah.Device.Information:createContext`, `releaseContext` and `UserManagement:authenticate`. `utils/APIClient.py` does these; `scripts/discover_endpoints.py` only looks in `resources/`.
 - Not in the internetbox4's self-description, so probably for other models that share the web interface: `Screen:getBrightTime`, `setBrightTime`, `getLanguage`, `setLanguage`, `getShowWifiPassword`, `setShowWifiPassword`, `getShowGuestPassword`, `setShowGuestPassword`, and the list of open connections, `Conntrack:openQuery`, `closeQuery` and `Conntrack.Query:get`. The web interface only calls `NMC.MCU:get` on another model (`stargatev5pro`).
@@ -205,30 +206,32 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 
 - [ ] `get_device_config()` → `Devices.Device.{mac}:get`
 - [x] `get_model_info()` → `UPnP-IGD:get`
-- [ ] `get_vlan_id()` → `NeMo.Intf.data:getFirstParameter` (name=`VLANID`)
-- [ ] `get_mtu()` → `NeMo.Intf.data:getFirstParameter` (name=`MTU`)
+- [ ] ⚠️ **not readable on the internetbox4** `get_vlan_id()` → `NeMo.Intf.data:getFirstParameter` (name=`VLANID`)
+- [x] `get_mtu()` → `NeMo.Intf.data:getFirstParameter` (name=`MTU`)
 - [ ] ⚠️ **not on the internetbox4** `get_uplink_info()` → `UplinkMonitor.DefaultGateway:get`
 - [ ] ⚠️ **not on the internetbox4** `get_ipv6_status()` → `NMC.IPv6:get`
 - [ ] ⚠️ **not on the internetbox4** `get_ipv6_mode()` → `NMC.Autodetect:get`
 - [ ] ⚠️ **not on the internetbox4** `get_cgnat_status()` → `NMC.ServiceEligibility.DSLITE:get`
 - [ ] ⚠️ **not on the internetbox4** `set_cgnat_enable(enable)` → `NMC.ServiceEligibility.DSLITE:set`
 
-> `get_device_info()`, `get_memory_status()`, `get_time()`, `get_wan_status()`, `get_connection_status()` are all covered. `get_model_info()` is `firewall.py:upnp_description()`, next to the UPnP port forwarding switch.
+> `get_device_info()`, `get_memory_status()`, `get_time()`, `get_wan_status()`, `get_connection_status()` are all covered. `get_model_info()` is `firewall.py:upnp_description()`, next to the UPnP port forwarding switch. `get_mtu()` is `nmc.py:wan_mtu()`. On the internetbox4, `getFirstParameter` answers `null` for the MTU, so `wan_mtu()` uses `NeMo.Intf.data:getParameters` (traverse `down`), which gives it per interface: `{"veip0": 1500}`.
+>
+> ⚠️ The internetbox4's VLAN ID can't be read: `getFirstParameter` and `getParameters` find no `VLANID` below the `data` interface, its `vlan` MIB is empty, and `admin` gets "Permission denied" for the VLAN interface itself (`NeMo.Intf.gvlan_data`).
 >
 > ⚠️ The internetbox4 has no `UplinkMonitor`, `NMC.IPv6`, `NMC.Autodetect` or `NMC.ServiceEligibility.DSLITE` objects.
 
 ---
 
-### `LmRebootApi` → `nmc.py` — Reboot info missing
+### `LmRebootApi` → `nmc.py` — Complete for the internetbox4
 
-- [ ] `get_info()` → `NMC.Reboot:get`
-- [ ] ⚠️ **not on the internetbox4** `get_history()` → `NMC.Reboot.Reboot:get`
+- [x] `get_info()` → `NMC.Reboot:get`
+- [x] `get_history()` → `NMC.Reboot.Reboot:get`
 - [x] `reboot_device(reason)` → `NMC:reboot`
 - [ ] 🚫 `factory_reset(reason, timeout)` → `NMC:reset`
 
-> `reboot_device()` is `nmc.py:reboot()`.
+> `get_info()` and `get_history()` are `nmc.py:reboot_info()` and `reboot_history()`, and `reboot_device()` is `nmc.py:reboot()`.
 >
-> ⚠️ The internetbox4's `NMC.Reboot` has no `Reboot` list of past restarts.
+> Tested live: the history keeps the last 10 starts, numbered like `BootCounter`, so the newest is the current one. A restart with `reboot()` shows its reason as the `ShutdownReason` (`pyinternetbox`), and the next start's `BootReason` is `NMC`. When the router was switched off or lost power, that start has no `ShutdownDate`, and the next one's `BootReason` is `POR` (power-on reset).
 >
 > 🚫 `factory_reset()` wipes all the router's settings, so it's left out on purpose.
 
@@ -370,8 +373,8 @@ The list of method names here refer to the methods in `LiveboxMonitor/api/*.py` 
 | `LmFirewallApi` | Complete |
 | `LmIntfApi` | Partial — ethernet/ONT/key-list MIBs missing; SFP and HomeLan aren't on the internetbox4 |
 | `LmIptvApi` | Not on the internetbox4 |
-| `LmLiveboxInfoApi` | Partial — device config, VLAN and MTU missing; IPv6, CGNAT and uplink aren't on the internetbox4 |
-| `LmRebootApi` | Partial — reboot info missing; history isn't on the internetbox4; factory reset left out on purpose |
+| `LmLiveboxInfoApi` | Partial — device config missing; the VLAN ID can't be read on the internetbox4; IPv6, CGNAT and uplink aren't on it |
+| `LmRebootApi` | Complete for the internetbox4 — factory reset left out on purpose |
 | `LmRoutingApi` | Partial — turning a route on or off missing (not in the web UI either) |
 | `LmScreenApi` | Not on the internetbox4 |
 | `LmStatsApi` | Complete for the internetbox4 — HomeLan isn't on it |
