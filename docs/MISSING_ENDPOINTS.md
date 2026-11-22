@@ -4,7 +4,8 @@ What pyinternetbox doesn't implement, and why. Found on an Internet Box 4 (IB4-0
 
 [API_MAP.md](API_MAP.md) is the complete list: every endpoint the web interface calls and every function the router exposes, with their parameters, and which ones pyinternetbox implements. `scripts/discover_endpoints.py` generates it, and its summary has the counts. This page sorts what's left: what could still be added, what's left out on purpose, what isn't possible on the internetbox4 and what isn't needed. How the implemented endpoints behave is in their methods' docstrings.
 
-🌐 marks endpoints the web interface uses: its JavaScript, and the parameters in API_MAP.md, show how to call them.
+- 🌐 used by the web interface: its JavaScript, and the parameters in API_MAP.md, show how to call it
+- 🚫 left out because a mistake could lock you out of the router or wipe its settings
 
 ## Adding an endpoint
 

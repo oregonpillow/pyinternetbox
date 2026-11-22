@@ -16,7 +16,10 @@
 
 ## Endpoints used by the web interface
 
-✏️ = changes settings, ✅ = implemented in pyinternetbox. Parameters are the names the web UI sends (values omitted).
+Parameters are the names the web UI sends (values omitted).
+
+- ✏️ changes settings
+- ✅ implemented in pyinternetbox
 
 | Endpoint | ✏️ | ✅ | Parameters |
 | --- | --- | --- | --- |
@@ -262,7 +265,12 @@
 
 ## Everything the router exposes
 
-From the router's self-description. Arguments marked `?` are optional. 🌐 = used by the web interface, ✅ = implemented in pyinternetbox.
+From the router's self-description.
+
+- `?` after an argument: optional
+- ✏️ changes settings
+- 🌐 used by the web interface
+- ✅ implemented in pyinternetbox
 
 Besides the listed functions, every object accepts the generic `get` (read all parameters) and `set` (`{"parameters": {"parameters": {"Name": value}}}`), which can change any of its writable parameters.
 
