@@ -163,14 +163,15 @@ def _model_parameters(js: str, start: int) -> set[str]:
 
 
 def _ws_service_path(expr: str) -> list[str]:
-    parts: list[str] = []
+    # Join the pieces first: in "Devices.Device.ETH"+e the variable is part of the segment ETH0, not a segment of its own.
+    service = ""
     for piece in expr.split("+"):
         piece = piece.strip()
         if piece.startswith('"') and piece.endswith('"'):
-            parts += split_path(piece.strip('"'))
+            service += piece.strip('"')
         elif piece:
-            parts.append(DYNAMIC)
-    return parts
+            service += DYNAMIC
+    return [DYNAMIC if DYNAMIC in seg else seg for seg in split_path(service)]
 
 
 def extract_webui_endpoints(sources: dict[str, str]) -> list[Endpoint]:
@@ -250,6 +251,7 @@ def client_endpoints() -> list[Endpoint]:
             eps.append(Endpoint([DYNAMIC if "{" in s else s for s in split_path(path)], method))
         for service, method in re.findall(r'"service":\s*f?"([^"]+)",\s*"method":\s*"([A-Za-z0-9_]+)"', text):
             if not service.startswith("com"):
+                service = re.sub(r"\{[^{}]*\}", DYNAMIC, service)  # f-string placeholders such as {mac.upper()} contain dots
                 eps.append(Endpoint([DYNAMIC if "{" in s else s for s in split_path(service)], method))
     return eps
 

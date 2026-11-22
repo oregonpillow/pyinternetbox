@@ -8,10 +8,10 @@
 
 | | Endpoints | Change settings |
 | --- | --- | --- |
-| Called by the web interface | 240 | 101 |
+| Called by the web interface | 239 | 101 |
 | Functions exposed by the router (self-description) | 727 | 369 |
-| Implemented in pyinternetbox | 209 | 69 |
-| Web interface endpoints missing from pyinternetbox | 71 | 42 |
+| Implemented in pyinternetbox | 208 | 69 |
+| Web interface endpoints missing from pyinternetbox | 70 | 42 |
 | Writable parameters (generic `set`) on 315 objects | 1873 | 1873 |
 
 ## Endpoints used by the web interface
@@ -95,7 +95,7 @@
 | `DSPGDECT:get` |  | ✅ |  |
 | `DeviceInfo.MemoryStatus:get` |  | ✅ |  |
 | `DeviceInfo:get` |  | ✅ | `flag`, `mibs`, `traverse` |
-| `Devices.Device.{id}.{id}:getEventLog` |  | ✅ | `type` |
+| `Devices.Device.{id}.UDevice:get` |  | ✅ |  |
 | `Devices.Device.{id}:get` |  | ✅ | `flags` |
 | `Devices.Device.{id}:getEventLog` |  | ✅ | `type` |
 | `Devices.Device.{id}:topology` |  | ✅ | `expression`, `flags`, `traverse` |
@@ -239,7 +239,6 @@
 | `DeviceManager.Connectivity:getStatus` |  |  |  |
 | `Devices.Device.{id}.LDevice:get` |  |  |  |
 | `Devices.Device.{id}.SSW:execAPI` |  |  | `method`, `parameters`, `service` |
-| `Devices.Device.{id}.UDevice:get` |  |  |  |
 | `Devices.Device.{id}:deRegister` |  |  |  |
 | `Devices.Device.{id}:ring` |  |  |  |
 | `FMR5G.Devices.{id}:getResults` |  |  |  |

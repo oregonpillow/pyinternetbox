@@ -42,7 +42,7 @@ class Wireguard(APIClient):
         """Turn WireGuard on or off as a whole, with its server and clients. The web UI has no switch for it.
 
         While it's off, the web UI doesn't offer WireGuard, and set_server_enabled() and add_client() refuse. Turning it
-        off disconnects the VPN clients.
+        off disconnects the VPN clients. The server and its clients stay, and are back unchanged when it's turned on.
 
         Args:
             enable (bool): True to turn WireGuard on, False to turn it off.
@@ -189,8 +189,9 @@ class Wireguard(APIClient):
     def _ensure_server(self) -> None:
         """Create the WireGuard server if the router has none yet, like the web UI the first time the VPN is used.
 
-        The router allows only one server and names it itself: it refuses a second one, with or without a name. The
-        other methods use the server named "default", the name the internetbox4 gives it.
+        The router allows only one server and names it itself: it refuses a second one ("duplicate keys"), with or
+        without a name, port or subnet. The other methods use the server named "default", the name the internetbox4
+        gives it.
         """
         names = self._server_names()
         if not names:

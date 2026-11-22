@@ -140,3 +140,19 @@ class TestDnsQueryMetrics:
         assert "internetbox_dns_queries_forwarded_total 5.0" in text
         assert "internetbox_dns_local_answered" not in text
         assert "internetbox_dns_queries_sent" not in text
+
+
+def test_boots_are_a_counter() -> None:
+    client = MagicMock()
+    client.devices.get.return_value = json.dumps({"status": []})
+    # Shape of NMC/Reboot:get on an Internet Box 4.
+    client.nmc.reboot_info.return_value = json.dumps(
+        {"status": {"Flush": False, "BootCounter": 33, "WatchdogRebootCounter": 20, "RebootSinceLastUpgrade": 1}}
+    )
+    col = InternetBoxCollector(client=client)
+    register_metrics(col, client)
+    col._callbacks = [cb for cb in col._callbacks if cb.__name__ == "collect_boots"]
+    col._run_callbacks()
+    text = _metrics_text(col)
+    assert "# TYPE internetbox_boots_total counter" in text
+    assert "internetbox_boots_total 33.0" in text

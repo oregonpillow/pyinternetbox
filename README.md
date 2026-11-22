@@ -19,6 +19,7 @@
 - [📡 Running the Exporter](#-running-the-exporter)
   - [Traffic metrics: which one to use](#traffic-metrics-which-one-to-use)
   - [DNS query metrics](#dns-query-metrics)
+  - [Restart metric](#restart-metric)
 - [🤖 MCP Server](#-mcp-server)
   - [Setup in OpenCode](#setup-in-opencode)
   - [What the AI may do](#what-the-ai-may-do)
@@ -228,6 +229,13 @@ are counters that count since the router last booted.
 - The router also reports `dns_auth_answered`, `fallback` and `dns_queries_failed_or_retried`. They aren't exported: the
   first two are unclear (always 0 so far), and the last is just failed + retried.
 
+### Restart metric
+
+`internetbox_boots_total` counts how often the router has started: after a restart, a firmware upgrade or a power cut.
+
+- **"Did the router restart in the last day?"** → `increase(internetbox_boots_total[1d]) > 0`.
+- `ibox nmc reboot-history` shows when and why it started the last 10 times.
+
 Dashboards can be found in the Grafana folder.
 
 <p align="center">
@@ -362,7 +370,7 @@ So far the project is in early stages and I'm the only contributor, but I welcom
 
 ### How to contribute
 
-- Read the [MISSING_ENDPOINTS](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints: what's worth adding next from the web interface, and what might work from [LiveboxMonitor](https://github.com/p-dor/LiveboxMonitor)
+- Read the [MISSING_ENDPOINTS](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/MISSING_ENDPOINTS.md) doc if you want to work on implementing missing endpoints: what could still be added, and what's left out or not possible, and why
 - Check the [API_MAP](https://github.com/oregonpillow/pyinternetbox/blob/master/docs/API_MAP.md) for every endpoint the web interface calls and every function the router exposes, and which ones are implemented. Re-generate it for your model or firmware with `uv run scripts/discover_endpoints.py -H 192.168.1.1 -k`
 - Try creating more complex methods, see below for more details
 - Take a stab at implementing any bugs or features raised in the issues

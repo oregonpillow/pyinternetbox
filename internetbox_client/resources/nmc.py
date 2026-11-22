@@ -96,7 +96,7 @@ class NMC(APIClient):
             str: response content
 
         """
-        data = {"parameters": {"name": "MTU", "traverse": "down"}}
+        data = {"parameters": {"name": "MTU", "traverse": "down"}}  # getFirstParameter answers null on the internetbox4
         return self.post("/sysbus/NeMo/Intf/data:getParameters", data)
 
     def orientation(self) -> str:
@@ -137,9 +137,10 @@ class NMC(APIClient):
     def reboot_history(self) -> str:
         """Get the router's last 10 starts: when and why it started (BootDate, BootReason) and shut down before.
 
-        BootReason is e.g. "POR" when it was switched on, also after a power cut, "NMC" after reboot() or a restart in
-        the web UI, or "Watchdog". ShutdownReason is the reason given to reboot(), or "Upgrade" for a firmware upgrade.
-        A ShutdownDate of 0001-01-01T00:00:00Z means no shutdown was recorded: the router lost power, or it's still running.
+        The starts are numbered like BootCounter in reboot_info(), so the newest is the current one. BootReason is e.g.
+        "POR" when it was switched on, also after a power cut, "NMC" after reboot() or a restart in the web UI, or
+        "Watchdog". ShutdownReason is the reason given to reboot(), or "Upgrade" for a firmware upgrade. A ShutdownDate
+        of 0001-01-01T00:00:00Z means no shutdown was recorded: the router lost power, or it's still running.
 
         Returns:
             str: response content

@@ -86,6 +86,7 @@ ANSWERS: dict[str, Any] = {
         "data": {"LinkType": "gpon", "LinkState": "up", "ConnectionState": "Bound", "IPAddress": "203.0.113.7", "IPv6Address": ""},
     },
     "/sysbus/NMC:get": {"status": {"ActiveWANInterface": "XGS-PON"}},
+    "/sysbus/NMC/Reboot:get": {"status": {"BootCounter": 33, "WatchdogRebootCounter": 20, "RebootSinceLastUpgrade": 1}},
     "/sysbus/NMC/Wifi:get": {"status": {"Enable": True, "ConfigurationMode": False, "WPSEnable": False}},
     "/sysbus/NMC/Guest:get": {"status": None, "data": {"Enable": False, "ActivationTimeout": 0, "BandwidthLimitation": 200}},
     "/sysbus/Firewall:get": {"status": {"AdvancedLevel": "High", "AdvancedIPv6Level": "Medium", "UpnpPortForwardingEnable": False}},
@@ -289,11 +290,19 @@ def test_router_overview(client: InternetBoxClient) -> None:
     assert not failed
     assert overview["router"]["model"] == "IB4-00"
     assert overview["router"]["uptime"] == "1 d 2 h 3 min"
+    assert overview["router"]["boots"] == 33
     assert overview["internet"]["public_ipv4"] == "203.0.113.7"
     assert overview["internet"]["interface"] == "XGS-PON"
     assert overview["wifi"] == {"wifi_enabled": True, "guest_wifi_enabled": False}
     assert overview["devices"] == {"connected": 2, "known": 4}
     assert overview["firewall"] == {"ipv4_level": "High", "ipv6_level": "Medium"}
+
+
+def test_router_overview_without_boots(client: InternetBoxClient, router: FakeRouter) -> None:
+    router.answers["/sysbus/NMC/Reboot:get"] = _http_error(401)
+    overview = json.loads(call(build_server(client), "router_overview")[1])
+    assert overview["router"]["model"] == "IB4-00"
+    assert "The router rejected the request: 401 Client Error" in overview["router"]["boots"]["error"]
 
 
 def test_a_failing_part_shows_its_error(client: InternetBoxClient, router: FakeRouter) -> None:

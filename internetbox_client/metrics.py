@@ -290,6 +290,17 @@ def register_metrics(collector: InternetBoxCollector, client: InternetBoxClient)
             description="Number of crash reports collected by the Internet Box",
         )
 
+    # ── Boots ───────────────────────────────────────────
+    @collector.register_collector
+    def collect_boots(col: InternetBoxCollector) -> None:
+        data = json.loads(client.nmc.reboot_info())
+        col.update_counter(
+            name="internetbox_boots",
+            value=data["status"]["BootCounter"],
+            labels=None,
+            description="Times the Internet Box has started, e.g. after a restart, a firmware upgrade or a power cut",
+        )
+
     # ── Port Forwarding Rules ───────────────────────────────────────────
     @collector.register_collector
     def collect_port_forwarding(col: InternetBoxCollector) -> None:

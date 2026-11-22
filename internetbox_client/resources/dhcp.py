@@ -4,7 +4,8 @@ from internetbox_client.utils.APIClient import APIClient
 from internetbox_client.utils.helpers import normalize_mac
 from internetbox_client.utils.labels import write
 
-# The address pools with fixed IP addresses: the home network's and the guest Wi-Fi's.
+# The address pools with fixed IP addresses: the home network's and the guest Wi-Fi's. The internetbox4's third pool,
+# fmr5gmgt, seems to be for the 5G box's management network.
 _POOLS = ("default", "guest")
 
 
@@ -34,7 +35,9 @@ class DHCP(APIClient):
     def add_static_lease(self, mac: str, ip: str, pool: Literal["default", "guest"] = "default") -> str:
         """Reserve an IP address for a device (static DHCP lease).
 
-        The device gets the address the next time it renews its lease, e.g. when it reconnects.
+        The device gets the address the next time it renews its lease, e.g. when it reconnects. In the guest pool, the
+        router refuses an address outside its network (10.128.0.0/16) and the router's own. A reservation for a device
+        the router doesn't know yet adds the device to the device list (devices.get()).
 
         Args:
             mac (str): device MAC address, e.g. "AA:BB:CC:DD:EE:FF".

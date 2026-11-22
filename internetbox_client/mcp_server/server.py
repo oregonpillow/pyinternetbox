@@ -358,8 +358,9 @@ def build_server(client: InternetBoxClient, options: Options | None = None, metr
     # ── Reads ────────────────────────────────────────────────────────────
 
     def router_overview(ctx: Context) -> str:
-        """An overview of the router: model, firmware, uptime, internet connection and public IP addresses, whether
-        Wi-Fi and guest Wi-Fi are on, how many devices are connected and the firewall level. Start here."""
+        """An overview of the router: model, firmware, uptime and how often it has started (boots), internet connection
+        and public IP addresses, whether Wi-Fi and guest Wi-Fi are on, how many devices are connected and the firewall
+        level. Start here."""
 
         def router() -> dict:
             info = _body(client.devices.info())
@@ -369,6 +370,7 @@ def build_server(client: InternetBoxClient, options: Options | None = None, metr
                 "firmware": info.get("SoftwareVersion"),
                 "hardware": info.get("HardwareVersion"),
                 "uptime": _duration(info.get("UpTime") or 0),
+                "boots": part(lambda: _body(client.nmc.reboot_info()).get("BootCounter")),
                 "status": info.get("DeviceStatus"),
             }
 

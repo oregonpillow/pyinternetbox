@@ -373,7 +373,7 @@ class Firewall(APIClient):
             "description": name,
             "origin": "webui",
             "sourceInterface": "data",
-            "sourcePort": "",
+            "sourcePort": "",  # empty like LiveboxMonitor, which found that a source port doesn't work, at least on a Livebox 5
             "sourcePrefix": "",
             "destinationPort": f"{first}-{last}" if last != first else str(first),
             "destinationIPAddress": str(address),

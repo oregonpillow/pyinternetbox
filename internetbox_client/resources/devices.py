@@ -193,6 +193,7 @@ class Devices(APIClient):
         """
         if device_type not in DEVICE_TYPES:
             raise ValueError(f"device_type must be one of the web UI's types: {', '.join(DEVICE_TYPES)}. Got {device_type!r}")
+        # Like the web UI, which sets DeviceType instead of calling setType.
         parameters = {"parameters": {"DeviceType": device_type}}
         return self.post("/ws", {"service": f"Devices.Device.{_device_key(key)}", "method": "set", "parameters": parameters})
 
