@@ -432,7 +432,7 @@ def mcp_server(
 
     The app starts this command itself: see https://oregonpillow.github.io/pyinternetbox/mcp/ for its configuration.
     Reads are always offered; changes need --allow-writes or --allow-disruptive.
-    Needs pyinternetbox's optional mcp dependencies: pip install "pyinternetbox[mcp]".
+    Needs pyinternetbox's optional mcp dependencies: pip install "pyinternetbox\\[mcp]".
     """
     try:
         from internetbox_client.mcp_server.server import Options, build_server

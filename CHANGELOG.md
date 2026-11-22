@@ -4,9 +4,13 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-22
+
+A documentation site, with a reference of every library method. The library, the CLI, the exporter and the MCP server work as before, so nothing changes when you upgrade.
+
 ### Added
 
-- **Documentation site** at <https://oregonpillow.github.io/pyinternetbox/>, published with each release. It has the README's former contents, the contributor docs and a reference of every library method, generated from the docstrings. The README is now a short overview that links to it.
+- **Documentation site** at <https://oregonpillow.github.io/pyinternetbox/>, for the version on PyPI. It has what the README used to explain: getting started, the exporter's metrics, the MCP server's setup, the environment variables and the contributor docs. It also has a reference of every library method, generated from the docstrings. The README is now a short overview that links to it, and so do the PyPI project page and `ibox mcp --help`.
 
 ## [0.3.1] - 2026-11-22
 
@@ -97,7 +101,8 @@ pyinternetbox can now change the router's settings, like the switches and forms 
 
 First release: the Python library, the `ibox` CLI and a Prometheus exporter with Grafana dashboards, for Swisscom and Wingo Internet Box routers. Published on PyPI and as the Docker image `oregonpillow/pyinternetbox`.
 
-[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/oregonpillow/pyinternetbox/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oregonpillow/pyinternetbox/compare/v0.1.1...v0.2.0
