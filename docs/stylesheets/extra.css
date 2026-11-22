@@ -1,0 +1,4 @@
+/* A wider layout than the theme's 61rem, so wide tables fit. */
+.md-grid {
+  max-width: 80rem;
+}
