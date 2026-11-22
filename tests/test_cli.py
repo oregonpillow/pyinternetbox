@@ -402,6 +402,56 @@ def test_disruptive_commands_ask_first() -> None:
     assert disruptive <= set(cli._CONFIRM)
 
 
+# ── Prometheus exporter ───────────────────────────────────────────────
+
+
+def _export(login_error: Exception | None = None) -> tuple[Any, MagicMock, list[str]]:
+    """Run `ibox export` with a fake client, collector and HTTP server. It stops straight away, as after a SIGTERM."""
+    client, steps = MagicMock(), []
+    client._sm._ensure_authenticated.side_effect = login_error or (lambda: steps.append("login"))
+    with (
+        patch.object(cli, "_make_client", return_value=client),
+        patch("internetbox_client.exporter.InternetBoxCollector") as collector,
+        patch("internetbox_client.metrics.register_metrics"),
+        patch("prometheus_client.REGISTRY"),
+        patch("prometheus_client.start_http_server", side_effect=lambda port: steps.append(f"listen on {port}")),
+        patch("signal.signal", side_effect=lambda sig, handler: handler(sig, None)),
+    ):
+        collector.return_value.start.side_effect = lambda: steps.append("collect")
+        result = runner.invoke(cli.app, ["-p", "secret", "export"])
+    return result, client, steps
+
+
+def test_export_needs_the_password() -> None:
+    result = runner.invoke(cli.app, ["export"], env={"IB_PASSWORD": ""})
+    assert result.exit_code == 1
+    assert "The exporter needs the router password" in result.output
+
+
+def test_export_logs_in_before_collecting() -> None:
+    result, client, steps = _export()
+    assert result.exit_code == 0, result.output
+    assert steps == ["login", "collect", "listen on 9101"]
+    assert client._sm.application_name == "prometheus-exporter"
+    client.close.assert_called_once()
+
+
+def test_export_stops_when_the_router_refuses_the_login() -> None:
+    response = requests.Response()
+    response.status_code = 401
+    result, _, steps = _export(requests.HTTPError("401 Client Error: Unauthorized", response=response))
+    assert result.exit_code == 1
+    assert "refused the login. Check the password (IB_PASSWORD or --password)" in result.output
+    assert steps == []
+
+
+def test_export_starts_while_the_router_is_unreachable() -> None:
+    result, _, steps = _export(requests.ConnectionError("no route to host"))
+    assert result.exit_code == 0, result.output
+    assert "Could not log in to the router yet, trying again every 30s: no route to host" in result.output
+    assert steps == ["collect", "listen on 9101"]
+
+
 # ── MCP server and its metrics collector ──────────────────────────────
 
 

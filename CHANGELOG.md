@@ -11,6 +11,11 @@ What's new in each release of pyinternetbox. The newest release comes first. The
 - **Exporter**: how often the router has started (`internetbox_boots_total`), so `increase()` shows its restarts. See "Restart metric" in the README.
 - **MCP server**: `router_overview` shows how often the router has started (`boots`).
 
+### Changed
+
+- **Exporter**: `ibox export` stops straight away if the router password is missing, or the router refuses it, instead of running without metrics and trying to log in again every cycle. If the router can't be reached, e.g. while it restarts, it starts anyway and keeps trying, as before.
+- **Docker image**: runs as an unprivileged user (UID 10001) instead of root, and no longer contains pip or uv. The exporter needs no files, so nothing changes for it. Files you mount into the container must be readable by UID 10001.
+
 ## [0.3.0] - 2026-11-22
 
 More of the router's settings, in the library and as `ibox` commands: Wi-Fi band steering and standards, the DNS servers the router asks, firewall extras such as IPv6 pinholes, device types and DNS names, and overriding a device's access schedule for now. The exporter adds DNS query counters. Existing code, commands and metrics keep working as before.

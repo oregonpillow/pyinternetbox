@@ -354,7 +354,8 @@ def export(
 
     Connection credentials are taken from --host / --password / --username
     (or the IB_HOSTNAME / IB_PASSWORD / IB_USERNAME environment variables)
-    supplied before the 'export' sub-command.
+    supplied before the 'export' sub-command. The password is required, since
+    almost every metric needs it, and the exporter stops if the router refuses it.
     """
     import signal
 
@@ -365,10 +366,24 @@ def export(
 
     typer.echo(f"{PROJECT_NAME} {__version__}  |  {PROJECT_URL}")
 
+    if not _password:
+        _fail("The exporter needs the router password: set IB_PASSWORD, or give --password before export.")
     client = _make_client()
     # Use a distinct application name so the exporter session does not
     # collide with an active browser session on the router.
     client._sm.application_name = "prometheus-exporter"
+
+    # A refused login would fail every collection, so stop. If the router can't be reached, e.g. while it restarts,
+    # keep going: the collectors log in when it's back.
+    try:
+        client._sm._ensure_authenticated()
+    except requests.exceptions.RequestException as exc:
+        if exc.response is not None and exc.response.status_code == 401:
+            _fail(
+                f"The router at {_hostname} refused the login. Check the password (IB_PASSWORD or --password) "
+                "and the user name (IB_USERNAME or --username, default admin)."
+            )
+        typer.echo(f"Could not log in to the router yet, trying again every {interval}s: {exc}", err=True)
 
     collector = InternetBoxCollector(client, interval=interval)
     register_metrics(collector, client)

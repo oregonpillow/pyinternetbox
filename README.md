@@ -148,6 +148,8 @@ hide_secrets(json.loads(ibox.wifi.summary()))  # passwords and keys become "<hid
 The exporter exposes router metrics in [Prometheus](https://prometheus.io/) format on port `9101`.
 Only a sample of metrics are currently implemented - contributions are welcome!
 
+It needs the router password (`IB_PASSWORD`, see [Environment Variables](#environment-variables)), and stops straight away if it's missing or the router refuses it. If the router can't be reached, e.g. while it restarts, the exporter keeps trying.
+
 **with uv / pip**:
 
 ```sh
@@ -323,17 +325,17 @@ For example, the tool calls of the last day: `sum by (tool) (increase(ibox_mcp_t
 
 ## Environment Variables
 
-| **Variable**           | **Description**                                                                                                                                                                                                                                               | **Required** |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| `IB_HOSTNAME`          | Hostname or IP address of the Internet Box router, e.g. `192.168.1.1` or `https://192.168.1.1`. `http://` is upgraded to `https://`. Defaults to `https://internetbox.swisscom.ch`.                                                                           | No           |
-| `IB_USERNAME`          | Username for router authentication. Defaults to `admin`.                                                                                                                                                                                                      | No           |
-| `IB_PASSWORD`          | Password for router authentication. Defaults to an empty string. Without a password many of the client methods will not work. See below for complete list of methods that don't require authentication.                                                       | No           |
-| `IB_EXPORTER_PORT`     | TCP port the Prometheus `/metrics` endpoint listens on. Defaults to `9101`.                                                                                                                                                                                   | No           |
-| `IB_EXPORTER_INTERVAL` | Seconds between data collection cycles when running the exporter. Defaults to `30`.                                                                                                                                                                           | No           |
-| `IB_SSL_VERIFY`        | `true` / `false` to force SSL certificate verification on or off (CLI: `--insecure` / `-k`). When unset, verification is on for hostnames and automatically off for IP addresses, since the router's certificate is only valid for `internetbox.swisscom.ch`. | No           |
-| `IB_MCP_METRICS_URL`   | Where `ibox mcp` sends usage metrics, e.g. `http://127.0.0.1:9102` (CLI: `--metrics-url`). Unset: none are sent.                                                                                                                                              | No           |
-| `IB_MCP_EXPORTER_HOST` | Address `ibox mcp-exporter` listens on. Defaults to `127.0.0.1`.                                                                                                                                                                                              | No           |
-| `IB_MCP_EXPORTER_PORT` | TCP port `ibox mcp-exporter` listens on. Defaults to `9102`.                                                                                                                                                                                                  | No           |
+| **Variable**           | **Description**                                                                                                                                                                                                                                               | **Required**                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `IB_HOSTNAME`          | Hostname or IP address of the Internet Box router, e.g. `192.168.1.1` or `https://192.168.1.1`. `http://` is upgraded to `https://`. Defaults to `https://internetbox.swisscom.ch`.                                                                           | No                               |
+| `IB_USERNAME`          | Username for router authentication. Defaults to `admin`.                                                                                                                                                                                                      | No                               |
+| `IB_PASSWORD`          | Password for router authentication. Defaults to an empty string. Without a password many of the client methods will not work. See below for complete list of methods that don't require authentication.                                                       | For `ibox export` and `ibox mcp` |
+| `IB_EXPORTER_PORT`     | TCP port the Prometheus `/metrics` endpoint listens on. Defaults to `9101`.                                                                                                                                                                                   | No                               |
+| `IB_EXPORTER_INTERVAL` | Seconds between data collection cycles when running the exporter. Defaults to `30`.                                                                                                                                                                           | No                               |
+| `IB_SSL_VERIFY`        | `true` / `false` to force SSL certificate verification on or off (CLI: `--insecure` / `-k`). When unset, verification is on for hostnames and automatically off for IP addresses, since the router's certificate is only valid for `internetbox.swisscom.ch`. | No                               |
+| `IB_MCP_METRICS_URL`   | Where `ibox mcp` sends usage metrics, e.g. `http://127.0.0.1:9102` (CLI: `--metrics-url`). Unset: none are sent.                                                                                                                                              | No                               |
+| `IB_MCP_EXPORTER_HOST` | Address `ibox mcp-exporter` listens on. Defaults to `127.0.0.1`.                                                                                                                                                                                              | No                               |
+| `IB_MCP_EXPORTER_PORT` | TCP port `ibox mcp-exporter` listens on. Defaults to `9102`.                                                                                                                                                                                                  | No                               |
 
 ## Usage without authentication
 
